@@ -69,7 +69,12 @@ def test_plain_answer_completes_without_tools(tmp_path):
     r = run(rt.coordinator.run(m.mission_id, "say hi", **KW))
     assert r.ok and r.final_text == "Done." and r.steps == 1 and r.tool_calls == 0
     assert r.usage.input_tokens == 100 and r.cost_usd == 0.001 and r.model == "mock-model"
-    assert provider.calls[0]["tools"] == ["mock.clock", "mock.echo", "mock.open_url"]
+    assert provider.calls[0]["tools"] == [
+        "mock.clock",
+        "mock.echo",
+        "mock.open_url",
+        "agent.delegate",
+    ]
     assert "JARVIS Core" in provider.calls[0]["system"]
     assert types(rt, m.mission_id)[-3:] == [
         "agent.run.started",

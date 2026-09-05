@@ -13,10 +13,17 @@ The coordinator never executes anything itself and never sees credentials.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 from core.agents.prompts import SYSTEM_PROMPT
+from core.agents.roles import (
+    DELEGATE_TOOL,
+    ROLES,
+    delegate_tool_description,
+    delegate_tool_schema,
+)
 from core.agents.run import AgentRun, RunOutcome, messages_from_dicts, messages_to_dicts
 from core.capabilities.gateway import InvocationStatus
 from core.capabilities.registry import CapabilityRegistry
@@ -31,6 +38,7 @@ from core.models.provider import (
     filter_tool_calls,
 )
 from core.models.router import ModelRouter, NoEligibleModel, Path, RoutingRequest
+from core.permissions.engine import PermissionEngine
 from core.verifier.service import VerifiedExecutor
 
 SOURCE = "agent-coordinator"
@@ -46,6 +54,9 @@ class AgentCoordinator:
         router: ModelRouter,
         providers: dict[str, IntelligenceProvider],
         system_prompt: str = SYSTEM_PROMPT,
+        permissions: PermissionEngine | None = None,
+        allow_delegation: bool = True,
+        max_subagents_per_step: int = 4,
     ) -> None:
         self._bus = bus
         self._executor = executor
@@ -53,6 +64,9 @@ class AgentCoordinator:
         self._router = router
         self._providers = providers
         self._system = system_prompt
+        self._permissions = permissions
+        self._delegation = allow_delegation
+        self._max_sub = max_subagents_per_step
 
     # -- availability --------------------------------------------------------------------------
 
@@ -111,6 +125,52 @@ class AgentCoordinator:
             "tracker": BudgetTracker(budget or AgentBudget()),
             "env": {"user_id": user_id, "device_id": device_id, "device_trusted": device_trusted},
             "allow": allow,
+            "system": self._system,
+        }
+        return await self._loop(provider, state)
+
+    async def delegate(self, parent_state: dict[str, Any], role_name: str, goal: str) -> AgentRun:
+        """Run a context-isolated sub-run for ``role`` sharing the parent's mission and budget."""
+        parent: AgentRun = parent_state["run"]
+        role = ROLES[role_name]
+        allow = role.filter_allowlist(parent_state["allow"], self._caps)
+        env = parent_state["env"]
+        common = {"role": role.name, "parent_run_id": parent.run_id, "depth": parent.depth + 1}
+        try:
+            decision = self._router.choose(RoutingRequest(role.path))
+        except NoEligibleModel as exc:
+            run = AgentRun(parent.mission_id, "none", "none", "none", sorted(allow), **common)
+            return await self._finish(run, RunOutcome.FAILED, error=str(exc), env=env)
+        run = AgentRun(
+            parent.mission_id,
+            decision.model.provider,
+            decision.model.id,
+            decision.effort,
+            sorted(allow),
+            **common,
+        )
+        provider = self._providers.get(decision.model.provider)
+        if provider is None or not provider.available():
+            return await self._finish(
+                run,
+                RunOutcome.FAILED,
+                error=f"provider {decision.model.provider!r} unavailable",
+                env=env,
+            )
+        await self._emit(
+            "agent.subrun.started",
+            {"run": run.to_dict(), "goal": goal, "routing": decision.to_dict()},
+            parent.mission_id,
+            env["user_id"],
+            env["device_id"],
+        )
+        state = {
+            "run": run,
+            "messages": [Message("user", goal)],
+            "tracker": parent_state["tracker"],  # one mission budget for the whole tree
+            "env": env,
+            "allow": allow,
+            "system": f"{self._system}\n\n{role.prompt}",
         }
         return await self._loop(provider, state)
 
@@ -145,17 +205,17 @@ class AgentCoordinator:
                 run, RunOutcome.FAILED, error=f"provider {run.provider!r} unavailable"
             )
         tracker = BudgetTracker(AgentBudget(**p["budget"]))
-        tracker.steps, tracker.tool_calls, tracker.cost_usd = (
-            run.steps,
-            run.tool_calls,
-            run.cost_usd,
-        )
+        used = p.get("budget_used") or {}
+        tracker.steps = int(used.get("steps", run.steps))
+        tracker.tool_calls = int(used.get("tool_calls", run.tool_calls))
+        tracker.cost_usd = float(used.get("cost_usd", run.cost_usd))
         state = {
             "run": run,
             "messages": messages_from_dicts(p["messages"]),
             "tracker": tracker,
             "env": dict(p["env"]),
             "allow": frozenset(p["run"]["tools"]),
+            "system": self._system,
         }
         await self._emit(
             "agent.run.resumed",
@@ -184,16 +244,23 @@ class AgentCoordinator:
         tracker: BudgetTracker = state["tracker"]
         env = state["env"]
         tools = [ToolSpec.from_manifest(self._caps.get(n).manifest) for n in sorted(state["allow"])]
+        can_delegate = self._delegation and run.depth == 0
+        allow_names = set(state["allow"])
+        if can_delegate:
+            tools.append(
+                ToolSpec(DELEGATE_TOOL, delegate_tool_description(), delegate_tool_schema())
+            )
+            allow_names.add(DELEGATE_TOOL)
         while True:
             try:
                 tracker.record_step()
             except BudgetExceeded as exc:
                 return await self._budget_exceeded(run, exc, env)
-            run.steps = tracker.steps
+            run.steps += 1  # own steps; the shared tracker counts the whole tree
             try:
                 result = await provider.complete(
                     state["messages"],
-                    system=self._system,
+                    system=state["system"],
                     tools=tools,
                     model=run.model,
                     effort=run.effort,
@@ -233,7 +300,7 @@ class AgentCoordinator:
                 run.final_text = result.text
                 return await self._finish(run, RunOutcome.COMPLETED, env=env)
 
-            allowed, rejected = filter_tool_calls(result.tool_calls, state["allow"])
+            allowed, rejected = filter_tool_calls(result.tool_calls, allow_names)
             for call in rejected:
                 await self._emit(
                     "agent.tool.rejected",
@@ -255,17 +322,86 @@ class AgentCoordinator:
                         name=call.name,
                     )
                 )
+            delegations = [c for c in allowed if c.name == DELEGATE_TOOL]
+            if delegations:
+                stop = await self._delegate_many(state, delegations)
+                if stop is not None:
+                    return stop
             for call in allowed:
+                if call.name == DELEGATE_TOOL:
+                    continue
                 try:
                     tracker.record_tool_call()
                 except BudgetExceeded as exc:
                     return await self._budget_exceeded(run, exc, env)
-                run.tool_calls = tracker.tool_calls
+                run.tool_calls += 1
                 stop = await self._call_tool(
                     provider_state=state, call_id=call.call_id, name=call.name, args=call.args
                 )
                 if stop is not None:
                     return stop
+
+    async def _delegate_many(self, state: dict[str, Any], calls: list) -> AgentRun | None:
+        """Run independent delegations concurrently; results return in call order."""
+        run: AgentRun = state["run"]
+        env = state["env"]
+        if len(calls) > self._max_sub:
+            for call in calls[self._max_sub :]:
+                state["messages"].append(
+                    Message(
+                        "tool",
+                        json.dumps(
+                            {
+                                "status": "rejected",
+                                "reason": f"at most {self._max_sub} subagents per step",
+                            }
+                        ),
+                        tool_call_id=call.call_id,
+                        name=DELEGATE_TOOL,
+                    )
+                )
+            calls = calls[: self._max_sub]
+
+        async def one(call):
+            role_name = str(call.args.get("role", ""))
+            goal = str(call.args.get("goal", "")).strip()
+            if role_name not in ROLES or not goal:
+                return (
+                    call,
+                    None,
+                    {"status": "rejected", "reason": f"unknown role {role_name!r} or empty goal"},
+                )
+            sub = await self.delegate(state, role_name, goal)
+            return call, sub, None
+
+        results = await asyncio.gather(*(one(c) for c in calls))
+        for call, sub, err in results:
+            if err is not None:
+                state["messages"].append(
+                    Message("tool", json.dumps(err), tool_call_id=call.call_id, name=DELEGATE_TOOL)
+                )
+                continue
+            state["messages"].append(
+                Message(
+                    "tool",
+                    json.dumps(
+                        {
+                            "role": sub.role,
+                            "outcome": sub.outcome.value if sub.outcome else None,
+                            "result": sub.final_text,
+                            "error": sub.error,
+                            "cost_usd": round(sub.cost_usd, 6),
+                        }
+                    ),
+                    tool_call_id=call.call_id,
+                    name=DELEGATE_TOOL,
+                )
+            )
+        try:
+            state["tracker"].check()
+        except BudgetExceeded as exc:
+            return await self._budget_exceeded(run, exc, env)
+        return None
 
     async def _call_tool(
         self,
@@ -297,6 +433,29 @@ class AgentCoordinator:
             decision_id=decision_id,
         )
         inv = res.invocation
+        if inv.status is InvocationStatus.AWAITING_APPROVAL and run.depth > 0:
+            # Subagents cannot wait for the owner: close the ask deterministically and escalate.
+            if self._permissions is not None and inv.decision_id:
+                await self._permissions.deny(
+                    inv.decision_id,
+                    reason="subagent cannot wait for approval; escalate to coordinator",
+                )
+            provider_state["messages"].append(
+                Message(
+                    "tool",
+                    json.dumps(
+                        {
+                            "status": "needs_owner_approval",
+                            "escalate": "the coordinator must perform this action itself",
+                            "capability": name,
+                            "args": args,
+                        }
+                    ),
+                    tool_call_id=call_id,
+                    name=name,
+                )
+            )
+            return None
         if inv.status is InvocationStatus.AWAITING_APPROVAL:
             run.pending_decision_id = inv.decision_id
             await self._emit(
@@ -307,6 +466,7 @@ class AgentCoordinator:
                     "pending": {"call_id": call_id, "name": name, "args": args},
                     "messages": messages_to_dicts(provider_state["messages"]),
                     "budget": provider_state["tracker"].budget.to_dict(),
+                    "budget_used": provider_state["tracker"].to_dict(),
                     "env": env,
                 },
                 run.mission_id,
@@ -369,7 +529,7 @@ class AgentCoordinator:
         run.ended_at = datetime.now(UTC)
         env = env or {}
         await self._emit(
-            "agent.run.finished",
+            "agent.subrun.finished" if run.depth > 0 else "agent.run.finished",
             {"run": run.to_dict()},
             run.mission_id,
             env.get("user_id", DEFAULT_USER_ID),

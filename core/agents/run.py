@@ -28,6 +28,9 @@ class AgentRun:
     effort: str
     tools: list[str]
     run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    role: str = "coordinator"
+    parent_run_id: str | None = None
+    depth: int = 0
     steps: int = 0
     tool_calls: int = 0
     usage: Usage = field(default_factory=Usage)
@@ -47,6 +50,9 @@ class AgentRun:
         return {
             "run_id": self.run_id,
             "mission_id": self.mission_id,
+            "role": self.role,
+            "parent_run_id": self.parent_run_id,
+            "depth": self.depth,
             "provider": self.provider,
             "model": self.model,
             "effort": self.effort,

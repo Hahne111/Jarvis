@@ -92,6 +92,7 @@ class CoreRuntime:
             capabilities=capabilities,
             router=router,
             providers=providers,
+            permissions=permissions,
         )
         return cls(
             store=store,
