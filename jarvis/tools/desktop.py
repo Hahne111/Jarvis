@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import time
 import os
 import tempfile
@@ -6,6 +7,15 @@ import json
 import pyautogui
 
 pyautogui.FAILSAFE = False
+
+_IS_MAC = sys.platform == "darwin"
+
+# Windows-style modifier names -> macOS equivalents (pyautogui already maps 'alt' to Option)
+_MAC_KEY_ALIASES = {
+    "win": "command", "winleft": "command", "winright": "command", "super": "command",
+    "cmd": "command",
+    "altleft": "option", "altright": "option",
+}
 
 
 # ──────────────── Typing & Keys ────────────────
@@ -20,6 +30,8 @@ def type_text(text: str) -> str:
 def press_key(keys: str) -> str:
     """Press a key or hotkey combo. Example: 'ctrl+shift+esc', 'alt+tab', 'enter'."""
     parts = [k.strip() for k in keys.split("+")]
+    if _IS_MAC:
+        parts = [_MAC_KEY_ALIASES.get(k.lower(), k) for k in parts]
     pyautogui.hotkey(*parts)
     return f"Pressed: {keys}"
 
@@ -62,7 +74,46 @@ def read_screen() -> str:
     tmp = os.path.join(tempfile.gettempdir(), "jarvis_screen.png")
     img = pyautogui.screenshot()
     img.save(tmp)
+    if _IS_MAC:
+        # Retina: screenshot is in physical pixels, mouse works in logical points
+        screen_w, _ = pyautogui.size()
+        return _ocr_image_mac(tmp, img.width / screen_w if screen_w else 1.0)
     return _ocr_image(tmp)
+
+
+def _ocr_image_mac(image_path: str, scale: float = 1.0) -> str:
+    """Run Apple Vision OCR on an image file, return text with positions (logical screen coords)."""
+    try:
+        import Vision
+        from Foundation import NSURL
+    except ImportError:
+        return "OCR unavailable: pyobjc-framework-Vision is not installed (pip install -r requirements.txt)."
+    from PIL import Image
+
+    with Image.open(image_path) as im:
+        width, height = im.size
+    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(
+        NSURL.fileURLWithPath_(image_path), None
+    )
+    request = Vision.VNRecognizeTextRequest.alloc().init()
+    request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+    ok, err = handler.performRequests_error_([request], None)
+    if not ok:
+        return f"OCR failed: {err}"
+
+    rows = []
+    for obs in request.results() or []:
+        candidates = obs.topCandidates_(1)
+        if not candidates:
+            continue
+        box = obs.boundingBox()  # normalized, origin bottom-left
+        cx = (box.origin.x + box.size.width / 2) * width / scale
+        cy = (1 - (box.origin.y + box.size.height / 2)) * height / scale
+        rows.append((cy, cx, candidates[0].string()))
+    if not rows:
+        return "No text found on screen."
+    rows.sort()
+    return "\n".join(f"{text} | {int(cx)},{int(cy)}" for cy, cx, text in rows)
 
 
 def _ocr_image(image_path: str) -> str:
@@ -168,6 +219,17 @@ def find_on_screen(text: str) -> str:
 
 def get_open_windows() -> str:
     """Return titles of all open windows."""
+    if _IS_MAC:
+        import Quartz
+        opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+        titles = []
+        for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
+            if w.get("kCGWindowLayer", 0) != 0:
+                continue
+            owner = w.get("kCGWindowOwnerName", "")
+            title = w.get("kCGWindowName", "")  # empty without Screen Recording permission
+            titles.append(f"{owner}: {title}" if title else owner)
+        return "\n".join(dict.fromkeys(titles)) or "No open windows found."
     result = subprocess.run(
         ["powershell", "-command",
          "Get-Process | Where-Object {$_.MainWindowTitle} | "
@@ -179,6 +241,35 @@ def get_open_windows() -> str:
 
 def focus_window(title: str) -> str:
     """Bring a window to the foreground by partial title match."""
+    if _IS_MAC:
+        # Title passed as argv -> no escaping needed. Needs Accessibility permission.
+        script = """
+on run argv
+  set q to item 1 of argv
+  tell application "System Events"
+    repeat with p in (every process whose visible is true)
+      if (name of p) contains q then
+        set frontmost of p to true
+        return "ok"
+      end if
+      repeat with w in (every window of p)
+        if (name of w) contains q then
+          set frontmost of p to true
+          perform action "AXRaise" of w
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not found"
+end run
+"""
+        result = subprocess.run(["osascript", "-e", script, title], capture_output=True, text=True)
+        if result.returncode != 0:
+            return f"Could not focus '{title}': {result.stderr.strip()}"
+        if "not found" in result.stdout:
+            return f"No window matching '{title}' found."
+        return f"Focused: {title}"
     safe = title.replace("'", "''")
     ps = (
         f"$p = Get-Process | Where-Object {{$_.MainWindowTitle -like '*{safe}*'}} "
@@ -217,8 +308,29 @@ def media_control(action: str) -> str:
     key = key_map.get(action.lower().strip())
     if not key:
         return f"Unknown media action: {action}. Use play/pause/next/previous/mute."
-    pyautogui.press(key)
+    if _IS_MAC and key in _MAC_MEDIA_KEYS:
+        _mac_media_key(_MAC_MEDIA_KEYS[key])
+    else:
+        pyautogui.press(key)
     return f"Media: {action}"
+
+
+# NX_KEYTYPE_* codes — pyautogui has no media keys on macOS
+_MAC_MEDIA_KEYS = {"playpause": 16, "nexttrack": 17, "prevtrack": 18}
+
+
+def _mac_media_key(code: int) -> None:
+    """Post a system-defined media key press (down + up) on macOS."""
+    import Quartz
+    from AppKit import NSEvent
+
+    for down in (True, False):
+        flags = 0xA00 if down else 0xB00
+        data1 = (code << 16) | ((0xA if down else 0xB) << 8)
+        ev = NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            14, (0, 0), flags, 0, 0, None, 8, data1, -1  # 14 = NSEventTypeSystemDefined
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev.CGEvent())
 
 
 def screenshot(filename: str = "") -> str:
