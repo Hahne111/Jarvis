@@ -1,0 +1,23 @@
+# Ruff-Konfiguration (ADR-0001 §4): strenge Regeln nur für neuen Core-Code,
+# Legacy-Prototyp (jarvis/) und bestehende Tests werden nicht ungefragt umformatiert.
+target-version = "py311"
+line-length = 100
+extend-exclude = [".venv", "venv", "jarvis/data"]
+
+[lint]
+# Fatal-Regeln gelten überall: Syntaxfehler, ungültige Literal-Vergleiche, undefinierte Namen.
+select = ["E9", "F63", "F7", "F82"]
+
+# Sobald core/ entsteht (Commit 004): select auf ["E","F","W","I","B","UP","S","ASYNC"] erweitern und
+# die Legacy-Pfade (jarvis/**, bestehende tests/test_*.py) über [lint.per-file-ignores] ausnehmen.
+
+[format]
+exclude = [
+  "jarvis/**",
+  "tests/test_context.py",
+  "tests/test_llm.py",
+  "tests/test_memory.py",
+  "tests/test_stt.py",
+  "tests/test_tools.py",
+  "tests/test_tts.py",
+]
