@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>JARVIS Core – Debug</title>
+<style>
+ body{margin:0;background:#0b0f14;color:#cfe3ee;font:13px/1.4 ui-monospace,Menlo,Consolas,monospace}
+ header{display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid #1d2a36;background:#0e141b}
+ header b{color:#ffb454;letter-spacing:.08em} .ok{color:#5be3c0} .bad{color:#ff6b6b}
+ main{display:grid;grid-template-columns:1fr 340px;gap:0;height:calc(100vh - 44px)}
+ #log{overflow:auto;padding:8px 14px} #side{border-left:1px solid #1d2a36;padding:10px 14px;overflow:auto}
+ .ev{padding:3px 0;border-bottom:1px dotted #17222c;white-space:pre-wrap} .ev .t{color:#57c7ff} .ev .s{color:#5b6b78}
+ .ev.perm .t{color:#ffb454} .ev.cap .t{color:#5be3c0} .ev.ver .t{color:#c792ea} .ev.gw .t{color:#ff6b6b}
+ input,button{background:#121a23;color:#cfe3ee;border:1px solid #27394a;padding:6px 8px;font:inherit}
+ input{width:100%;box-sizing:border-box} button{cursor:pointer} button:hover{border-color:#57c7ff}
+ .row{display:flex;gap:6px;margin:6px 0} .appr{border:1px solid #3a2f14;background:#161208;padding:6px;margin:6px 0}
+ h4{margin:12px 0 4px;color:#8aa1b1;font-weight:600;letter-spacing:.06em}
+</style></head><body>
+<header><b>J.A.R.V.I.S. CORE</b><span id="health">…</span>
+ <span style="margin-left:auto"><button onclick="kill()">KILL SWITCH</button> <button onclick="resume()">resume (passkey)</button></span></header>
+<main>
+ <div id="log"></div>
+ <div id="side">
+  <h4>COMMAND</h4>
+  <input id="cmd" placeholder="echo hello | clock | open https://example.org | stop" onkeydown="if(event.key==='Enter')send()">
+  <div class="row"><label><input type="checkbox" id="trusted" checked style="width:auto"> trusted device</label><button onclick="send()">send</button></div>
+  <div id="result"></div>
+  <h4>PENDING APPROVALS</h4><div id="appr">none</div>
+  <h4>MISSIONS</h4><div id="missions"></div>
+  <h4>WHAT JARVIS KNOWS</h4>
+  <div class="row"><input id="memq" placeholder="search memory…" onkeydown="if(event.key==='Enter')refresh()"><button onclick="forgetSince()">forget 30 min</button></div>
+  <div id="memory"></div>
+ </div>
+</main>
+<script>
+const log=document.getElementById('log');let last=0;
+function cls(t){return t.startsWith('permission')?'perm':t.startsWith('capability')?'cap':t.startsWith('verification')?'ver':t.startsWith('gateway')?'gw':''}
+function add(e){const d=document.createElement('div');d.className='ev '+cls(e.type);
+ d.innerHTML=`<span class="s">#${e.seq} ${e.timestamp.slice(11,19)}</span> <span class="t">${e.type}</span> <span class="s">${e.source} · ${e.correlation_id.slice(0,8)}</span>\n${JSON.stringify(e.payload)}`;
+ log.appendChild(d);log.scrollTop=log.scrollHeight;last=e.seq}
+function connect(){const ws=new WebSocket(`ws://${location.host}/ws/events?after_seq=${last}`);
+ ws.onmessage=m=>{add(JSON.parse(m.data));refresh()};ws.onclose=()=>setTimeout(connect,1000)}
+async function j(url,opts){const r=await fetch(url,{headers:{'content-type':'application/json'},...opts});return r.json()}
+async function refresh(){const h=await j('/health');document.getElementById('health').innerHTML=
+  `<span class="${h.halted?'bad':'ok'}">${h.status}</span> v${h.version} · events ${h.events} · pending ${h.pending_approvals}`;
+ const a=await j('/approvals');document.getElementById('appr').innerHTML=a.length?a.map(d=>`<div class="appr">${d.request.action} ${JSON.stringify(d.request.context.args||{})}<br>P${d.request.risk} · needs strength ${d.required_strength}<div class="row">
+  <button onclick="approve('${d.decision_id}','ui_confirm')">confirm</button><button onclick="approve('${d.decision_id}','passkey')">passkey</button><button onclick="deny('${d.decision_id}')">deny</button></div></div>`).join(''):'none';
+ const m=await j('/missions');document.getElementById('missions').innerHTML=m.slice(-8).reverse().map(x=>`<div>${x.status.padEnd(20,'·')} ${x.goal}</div>`).join('');loadMemory()}
+async function loadMemory(){const q=document.getElementById('memq').value;const m=await j('/memory'+(q?`?q=${encodeURIComponent(q)}`:''));
+ document.getElementById('memory').innerHTML=m.length?m.slice(0,12).map(x=>`<div class="appr">${x.pinned?'📌 ':''}[${x.type} · ${x.confidence} · ${x.source}] ${x.subject} ${x.predicate}: ${typeof x.value==='string'?x.value:JSON.stringify(x.value)}<div class="row">
+  <button onclick="memAct('${x.memory_id}','${x.pinned?'unpin':'pin'}')">${x.pinned?'unpin':'pin'}</button><button onclick="memCorrect('${x.memory_id}')">correct</button><button onclick="memAct('${x.memory_id}','forget')">forget</button></div></div>`).join(''):'nothing learned yet'}
+async function memAct(id,a){await j(`/memory/${id}/${a}`,{method:'POST'});loadMemory()}
+async function memCorrect(id){const v=prompt('Corrected value:');if(v)await j(`/memory/${id}/correct`,{method:'POST',body:JSON.stringify({value:v})});loadMemory()}
+async function forgetSince(){if(confirm('Forget everything learned in the last 30 minutes?')){await j('/memory/forget_since',{method:'POST',body:JSON.stringify({minutes:30,reason:'debug ui'})});loadMemory()}}
+async function send(){const text=document.getElementById('cmd').value;if(!text)return;
+ const r=await j('/commands',{method:'POST',body:JSON.stringify({text,device_id:'debug-ui',device_trusted:document.getElementById('trusted').checked})});
+ document.getElementById('result').textContent=JSON.stringify({route:r.route,status:r.status,result:r.result,error:r.error,decision_id:r.decision_id},null,1);document.getElementById('cmd').value='';refresh()}
+const proof=m=>({method:m,device_id:'debug-ui',device_trusted:true,reference:'debug'});
+async function approve(id,m){await j(`/approvals/${id}/approve`,{method:'POST',body:JSON.stringify(proof(m))});refresh()}
+async function deny(id){await j(`/approvals/${id}/deny`,{method:'POST',body:JSON.stringify({reason:'debug deny'})});refresh()}
+async function kill(){await j('/kill',{method:'POST'});refresh()}
+async function resume(){await j('/resume',{method:'POST',body:JSON.stringify(proof('passkey'))});refresh()}
+connect();refresh();loadMemory();
+</script></body></html>

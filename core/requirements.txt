@@ -1,0 +1,7 @@
+# Runtime dependencies of the JARVIS Core process (Python 3.12 target, 3.11 compatible).
+# Kept separate from the voice prototype's requirements.txt (ADR-0001).
+sqlalchemy>=2.0.0
+fastapi>=0.115.0
+uvicorn>=0.34.0
+httpx>=0.27.0        # fastapi.testclient
+pytest>=8.0.0

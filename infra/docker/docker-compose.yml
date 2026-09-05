@@ -1,0 +1,25 @@
+# JARVIS – lokale Infrastruktur (Phase 0, Blueprint §4.3/§21)
+# Start:  cp .env.example .env && docker compose -f infra/docker/docker-compose.yml up -d
+# Nur für lokale Entwicklung / Home Core im privaten Netz. Port bindet standardmäßig auf 127.0.0.1.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: jarvis-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
+      POSTGRES_USER: ${POSTGRES_USER:-jarvis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - jarvis-pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis} -d ${POSTGRES_DB:-jarvis}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  jarvis-pgdata:
