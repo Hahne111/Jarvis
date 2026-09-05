@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from adapters.desktop import DesktopBackend, FakeDesktop, PrototypeDesktop, register_desktop
+from adapters.workspace import WorkspaceManager, register_workspace
 
 from core import __version__
 from core.agents import AgentCoordinator
@@ -44,6 +45,7 @@ from core.verifier import (
 )
 
 DEFAULT_DB_URL = "sqlite:///jarvis/data/core.db"
+DEFAULT_WORKSPACE_ROOT = "jarvis/data/workspaces"
 
 
 @dataclass
@@ -64,6 +66,7 @@ class CoreRuntime:
     memory: MemoryStore
     memory_writer: MemoryWriter
     presence: PresenceService
+    workspaces: WorkspaceManager
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -79,6 +82,7 @@ class CoreRuntime:
         providers: dict[str, IntelligenceProvider] | None = None,
         router: ModelRouter | None = None,
         desktop: DesktopBackend | str | None = None,
+        workspace_root: str | None = None,
     ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
@@ -99,6 +103,10 @@ class CoreRuntime:
         )
         if desktop_backend is not None:
             register_desktop(capabilities, verifiers, desktop_backend)
+        workspaces = WorkspaceManager(
+            workspace_root or os.environ.get("JARVIS_WORKSPACE_ROOT", DEFAULT_WORKSPACE_ROOT)
+        )
+        register_workspace(capabilities, verifiers, bus, workspaces)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -133,6 +141,7 @@ class CoreRuntime:
             memory=memory,
             memory_writer=memory_writer,
             presence=presence,
+            workspaces=workspaces,
             db_url=url,
         )
 
