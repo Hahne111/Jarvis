@@ -44,6 +44,20 @@ from core.permissions.engine import PermissionEngine
 from core.verifier.service import VerifiedExecutor
 
 SOURCE = "agent-coordinator"
+CODE_SUFFIXES = (
+    ".py",
+    ".js",
+    ".mjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".c",
+    ".cpp",
+    ".sh",
+)
 
 
 class AgentCoordinator:
@@ -60,6 +74,7 @@ class AgentCoordinator:
         allow_delegation: bool = True,
         max_subagents_per_step: int = 4,
         memory: MemoryStore | None = None,
+        workspaces: Any | None = None,
     ) -> None:
         self._bus = bus
         self._executor = executor
@@ -71,6 +86,7 @@ class AgentCoordinator:
         self._delegation = allow_delegation
         self._max_sub = max_subagents_per_step
         self._context = ContextBuilder(memory) if memory is not None else None
+        self._workspaces = workspaces
 
     # -- availability --------------------------------------------------------------------------
 
@@ -245,7 +261,10 @@ class AgentCoordinator:
             "env": dict(p["env"]),
             "allow": frozenset(p["run"]["tools"]),
             "system": self._system,
+            "workspace_used": bool(p.get("workspace_used")),
         }
+        if p.get("coding"):
+            state["coding"] = dict(p["coding"])
         await self._emit(
             "agent.run.resumed",
             {"run": run.to_dict(), "decision_id": decision_id},
@@ -327,6 +346,26 @@ class AgentCoordinator:
                 state["messages"].append(Message("assistant", result.text))
             if not result.tool_calls:
                 run.final_text = result.text
+                coding = state.setdefault("coding", {"code_written": False, "green_run": False})
+                if coding["code_written"] and not coding["green_run"]:
+                    # Development Law 8: no "done" before the verifier passes.
+                    if not state.get("nagged"):
+                        state["nagged"] = True
+                        state["messages"].append(
+                            Message(
+                                "user",
+                                "You changed code but there is no verified green run since. "
+                                "Run the tests/program with workspace.run, then answer.",
+                            )
+                        )
+                        continue
+                    return await self._finish(
+                        run,
+                        RunOutcome.NOT_VERIFIED,
+                        error="code changed without a verified green workspace.run",
+                        env=env,
+                    )
+                await self._publish_artifacts(state)
                 return await self._finish(run, RunOutcome.COMPLETED, env=env)
 
             allowed, rejected = filter_tool_calls(result.tool_calls, allow_names)
@@ -358,6 +397,38 @@ class AgentCoordinator:
                     return stop
             for call in allowed:
                 if call.name == DELEGATE_TOOL:
+                    continue
+                role = ROLES.get(run.role)
+                if (
+                    call.name == "workspace.run"
+                    and role is not None
+                    and not role.allows_run(str(call.args.get("command", "")))
+                ):
+                    await self._emit(
+                        "agent.tool.rejected",
+                        {
+                            "run_id": run.run_id,
+                            "call": call.to_dict(),
+                            "reason": f"role {role.name} may not run {call.args.get('command')!r}",
+                        },
+                        run.mission_id,
+                        env["user_id"],
+                        env["device_id"],
+                        priority=Priority.URGENT,
+                    )
+                    state["messages"].append(
+                        Message(
+                            "tool",
+                            json.dumps(
+                                {
+                                    "status": "rejected",
+                                    "reason": "command not allowed for this role",
+                                }
+                            ),
+                            tool_call_id=call.call_id,
+                            name=call.name,
+                        )
+                    )
                     continue
                 try:
                     tracker.record_tool_call()
@@ -497,6 +568,8 @@ class AgentCoordinator:
                     "budget": provider_state["tracker"].budget.to_dict(),
                     "budget_used": provider_state["tracker"].to_dict(),
                     "env": env,
+                    "coding": provider_state.get("coding"),
+                    "workspace_used": bool(provider_state.get("workspace_used")),
                 },
                 run.mission_id,
                 env["user_id"],
@@ -507,6 +580,7 @@ class AgentCoordinator:
             return run
         if inv.status is InvocationStatus.HALTED:
             return await self._finish(run, RunOutcome.HALTED, error=inv.error, env=env)
+        self._track_coding(provider_state, name, args, inv, res)
         provider_state["messages"].append(
             Message(
                 "tool",
@@ -524,6 +598,50 @@ class AgentCoordinator:
             )
         )
         return None
+
+    # -- coding workflow (SPEC §12.2) ------------------------------------------------------------
+
+    @staticmethod
+    def _track_coding(
+        state: dict[str, Any], name: str, args: dict[str, Any], inv: Any, res: Any
+    ) -> None:
+        coding = state.setdefault("coding", {"code_written": False, "green_run": False})
+        if name == "workspace.write" and inv.status is InvocationStatus.SUCCEEDED:
+            if str(args.get("path", "")).lower().endswith(CODE_SUFFIXES):
+                coding["code_written"] = True
+                coding["green_run"] = False  # any code change invalidates the previous run
+            state["workspace_used"] = True
+        elif name == "workspace.run":
+            state["workspace_used"] = True
+            coding["green_run"] = bool(res.ok)
+        elif name.startswith("workspace."):
+            state["workspace_used"] = True
+
+    async def _publish_artifacts(self, state: dict[str, Any]) -> None:
+        """Minimal artifact registry (step 49): one event per workspace file at completion."""
+        if not state.get("workspace_used") or self._workspaces is None:
+            return
+        run: AgentRun = state["run"]
+        env = state["env"]
+        try:
+            files = self._workspaces.list(run.mission_id)
+        except Exception:
+            return
+        for f in files:
+            if f["dir"]:
+                continue
+            await self._emit(
+                "artifact.created",
+                {
+                    "path": f["path"],
+                    "size": f["size"],
+                    "sha256": self._workspaces.file_sha256(run.mission_id, f["path"]),
+                    "run_id": run.run_id,
+                },
+                run.mission_id,
+                env["user_id"],
+                env["device_id"],
+            )
 
     async def _budget_exceeded(
         self, run: AgentRun, exc: BudgetExceeded, env: dict[str, Any]

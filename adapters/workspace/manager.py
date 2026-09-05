@@ -22,6 +22,7 @@ from pathlib import Path
 
 MAX_READ_BYTES = 512_000
 VERSION_DIR = ".jarvis/versions"
+CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache"})  # run by-products, never artifacts
 DEFAULT_ALLOWED_COMMANDS = (
     "python",
     "python3",
@@ -109,7 +110,8 @@ class WorkspaceManager:
         ws = self.workspace(workspace_id)
         out = []
         for p in sorted(base.rglob("*") if base.is_dir() else [base]):
-            if VERSION_DIR.split("/")[0] in p.relative_to(ws).parts:
+            parts = p.relative_to(ws).parts
+            if VERSION_DIR.split("/")[0] in parts or CACHE_DIRS.intersection(parts):
                 continue
             if p.is_symlink():
                 continue  # links are never followed (they could point outside the sandbox)

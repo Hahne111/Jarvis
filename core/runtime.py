@@ -123,6 +123,7 @@ class CoreRuntime:
             providers=providers,
             permissions=permissions,
             memory=memory,
+            workspaces=workspaces,
         )
         return cls(
             store=store,
