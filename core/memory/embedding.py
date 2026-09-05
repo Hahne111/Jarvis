@@ -26,7 +26,7 @@ class Embedder(Protocol):
 
 
 class HashingEmbedder:
-    """Bag-of-hashed-tokens vector, L2-normalised. Deterministic; no model download."""
+    """Hashed token counts as a unit-length vector. Deterministic; no model download."""
 
     def __init__(self, dimensions: int = 64) -> None:
         self.dimensions = dimensions

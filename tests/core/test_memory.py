@@ -294,14 +294,23 @@ def test_privacy_filters_and_dont_learn():
     run(writer.dont_learn("guest:anna"))
     assert run(writer.remember("preference", "guest:anna", "drink", "tea")).action == "skipped"
     with pytest.raises(MemoryPolicyError):
-        run(writer.remember("semantic", "owner", "safe_code", "1234", sensitivity="secret"))
+        run(
+            writer.remember(
+                "semantic", "owner", "locker", "north wing", sensitivity=Sensitivity.SECRET
+            )
+        )
     ok = run(
         writer.remember(
-            "semantic", "owner", "safe_code", "1234", sensitivity="secret", owner_approved=True
+            "semantic",
+            "owner",
+            "locker",
+            "north wing",
+            sensitivity=Sensitivity.SECRET,
+            owner_approved=True,
         )
     )
     assert ok.action == "written" and ok.item.sensitivity is Sensitivity.SECRET
-    assert all("1234" not in str(e.payload) for e in events(bus))  # value never in events
+    assert all("north wing" not in str(e.payload) for e in events(bus))  # value never in events
     off = make(MemoryPolicy(conversation_memory=False))[0]
     assert run(off.remember("preference", "owner", "x", "y")).action == "skipped"
     assert [e.type for e in events(bus)].count("memory.dont_learn") == 2

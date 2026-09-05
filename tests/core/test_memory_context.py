@@ -66,8 +66,8 @@ def test_context_builder_selects_relevant_items_and_hides_secrets_from_cloud():
         MemoryItem(
             "semantic",
             "owner",
-            "wifi_password",
-            "hunter2",
+            "vault_location",
+            "under the stairs",
             "explicit_statement",
             sensitivity=Sensitivity.SECRET,
         ),
@@ -82,11 +82,11 @@ def test_context_builder_selects_relevant_items_and_hides_secrets_from_cloud():
     assert block.text.startswith(HEADER)
     assert "preferred_editor: VS Code" in block.text and "database: PostgreSQL" in block.text
     assert "[preference, 0.90, explicit_statement]" in block.text
-    assert "hunter2" not in block.text and len(block.memory_ids) == 2
+    assert "under the stairs" not in block.text and len(block.memory_ids) == 2
     # secret allowed only for a local model
-    secret_cloud = cb.build("what is the wifi password")
-    secret_local = cb.build("what is the wifi password", cloud=False)
-    assert secret_cloud.empty and "hunter2" in secret_local.text
+    secret_cloud = cb.build("where is the vault located")
+    secret_local = cb.build("where is the vault located", cloud=False)
+    assert secret_cloud.empty and "under the stairs" in secret_local.text
     # budgets
     assert cb.build("editor database coffee", max_items=1).memory_ids.__len__() == 1
     assert cb.build("editor database coffee", max_chars=len(HEADER) + 10).empty
@@ -98,7 +98,12 @@ def test_coordinator_injects_context_and_records_which_memories_were_used(tmp_pa
     fact = run(rt.memory_writer.remember("preference", "owner", "preferred_editor", "VS Code")).item
     run(
         rt.memory_writer.remember(
-            "semantic", "owner", "vault_pin", "0000", sensitivity="secret", owner_approved=True
+            "semantic",
+            "owner",
+            "vault_location",
+            "cellar shelf",
+            sensitivity=Sensitivity.SECRET,
+            owner_approved=True,
         )
     )
     m = run(rt.missions.create("open my editor"))
@@ -109,7 +114,7 @@ def test_coordinator_injects_context_and_records_which_memories_were_used(tmp_pa
     )
     assert r.ok
     system = provider.calls[0]["system"]
-    assert HEADER in system and "VS Code" in system and "0000" not in system
+    assert HEADER in system and "VS Code" in system and "cellar shelf" not in system
     used = [
         e for _, e in rt.bus.replay(correlation_id=m.mission_id) if e.type == "memory.context_used"
     ]
@@ -122,12 +127,17 @@ def test_coordinator_injects_context_and_records_which_memories_were_used(tmp_pa
     rt_local, provider_local = build(tmp_path, [ProviderResult("ok")], local=True, name="l.db")
     run(
         rt_local.memory_writer.remember(
-            "semantic", "owner", "vault_pin", "0000", sensitivity="secret", owner_approved=True
+            "semantic",
+            "owner",
+            "vault_location",
+            "cellar shelf",
+            sensitivity=Sensitivity.SECRET,
+            owner_approved=True,
         )
     )
     m2 = run(rt_local.missions.create("x"))
-    run(rt_local.coordinator.run(m2.mission_id, "what is my vault pin", allowlist=set()))
-    assert "0000" in provider_local.calls[0]["system"]  # local model may see secrets
+    run(rt_local.coordinator.run(m2.mission_id, "where is my vault location", allowlist=set()))
+    assert "cellar shelf" in provider_local.calls[0]["system"]  # local model may see secrets
 
 
 def test_correction_changes_what_the_agent_is_told(tmp_path):
@@ -180,7 +190,12 @@ def test_memory_capabilities_run_through_gateway_and_verifier(tmp_path):
     assert recall.ok and recall.invocation.result["items"][0]["value"] == "green"
     run(
         rt.memory_writer.remember(
-            "semantic", "owner", "pin", "9999", sensitivity="secret", owner_approved=True
+            "semantic",
+            "owner",
+            "vault_location",
+            "cellar shelf",
+            sensitivity=Sensitivity.SECRET,
+            owner_approved=True,
         )
     )
     assert (
