@@ -1,4 +1,5 @@
 """Maps LLM tool call names to Python functions and provides tool schemas."""
+import sys
 from jarvis.tools.web_search import search, fetch_page, get_weather
 from jarvis.tools.app_control import open_app, open_url, kill_process
 from jarvis.tools.file_ops import read_file, write_file, list_files
@@ -14,6 +15,28 @@ from jarvis.tools.desktop import (
     click_at, scroll_screen, move_mouse, read_screen, find_on_screen,
 )
 from jarvis.tools.subagent import delegate_task
+
+_IS_MAC = sys.platform == "darwin"
+
+# Platform-specific wording in tool descriptions (the LLM only sees these strings)
+if _IS_MAC:
+    _OPEN_APP_DESC = (
+        "Open app by name: safari, chrome, firefox, edge, brave, discord, telegram, slack, teams, zoom, "
+        "whatsapp, messages, facetime, mail, vscode, terminal, iterm, xcode, spotify, vlc, music, photos, "
+        "steam, epic games, textedit, notes, word, excel, powerpoint, pages, numbers, keynote, calendar, "
+        "reminders, maps, preview, app store, finder, activity monitor, calculator, system settings. "
+        "Any other installed app name works too."
+    )
+    _PRESS_KEY_DESC = "Press key/hotkey: cmd+c, cmd+tab, cmd+space, cmd+q, enter, escape. (ctrl/alt/win are translated: win=cmd, alt=option)"
+    _NOTIFICATION_DESC = "Show a macOS notification (Notification Center)."
+else:
+    _OPEN_APP_DESC = (
+        "Open app by name: chrome, firefox, edge, brave, discord, telegram, slack, teams, zoom, vscode, "
+        "terminal, cmd, powershell, git bash, spotify, vlc, steam, epic games, notepad, notepad++, word, "
+        "excel, powerpoint, paint, snipping tool, explorer, task manager, calculator, settings, control panel."
+    )
+    _PRESS_KEY_DESC = "Press key/hotkey: ctrl+c, alt+tab, win+d, enter, escape, ctrl+shift+esc."
+    _NOTIFICATION_DESC = "Show a Windows toast notification."
 
 TOOL_MAP = {
     # Web
@@ -90,7 +113,7 @@ TOOL_SCHEMAS = [
     # --- Apps & processes ---
     {"type": "function", "function": {
         "name": "open_app",
-        "description": "Open app by name: chrome, firefox, edge, brave, discord, telegram, slack, teams, zoom, vscode, terminal, cmd, powershell, git bash, spotify, vlc, steam, epic games, notepad, notepad++, word, excel, powerpoint, paint, snipping tool, explorer, task manager, calculator, settings, control panel.",
+        "description": _OPEN_APP_DESC,
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string"}}, "required": ["name"]}}},
 
@@ -157,7 +180,7 @@ TOOL_SCHEMAS = [
 
     {"type": "function", "function": {
         "name": "press_key",
-        "description": "Press key/hotkey: ctrl+c, alt+tab, win+d, enter, escape, ctrl+shift+esc.",
+        "description": _PRESS_KEY_DESC,
         "parameters": {"type": "object", "properties": {
             "keys": {"type": "string"}}, "required": ["keys"]}}},
 
@@ -250,7 +273,7 @@ TOOL_SCHEMAS = [
     # --- Notifications & timers ---
     {"type": "function", "function": {
         "name": "show_notification",
-        "description": "Show a Windows toast notification.",
+        "description": _NOTIFICATION_DESC,
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string"},
             "message": {"type": "string"}}, "required": ["title", "message"]}}},
