@@ -30,6 +30,8 @@ from sqlalchemy.pool import StaticPool
 from core.memory.embedding import Embedder, cosine, tokenize
 from core.memory.model import MemoryItem, MemoryType, Retention
 
+SEMANTIC_MIN = 0.5
+
 metadata = MetaData()
 
 memory_table = Table(
@@ -230,7 +232,9 @@ class MemoryStore:
             tokens = set(tokenize(text_index))
             lexical = len(q_tokens & tokens) / len(q_tokens)
             semantic = cosine(q_vec, json.loads(emb)) if (q_vec is not None and emb) else 0.0
-            relevance = max(lexical, semantic) if q_vec is not None else lexical
+            if semantic < SEMANTIC_MIN:  # below this, hashed/embedded similarity is noise
+                semantic = 0.0
+            relevance = max(lexical, semantic)
             if relevance <= 0:
                 continue
             age_days = max(0.0, (now - item.last_confirmed_at).total_seconds() / 86400)

@@ -11,6 +11,8 @@ Endpoints
     POST /approvals/{decision_id}/deny {reason?}
     POST /kill, POST /resume {method, device_id, device_trusted}
     GET  /debug                        minimal debug dashboard (static HTML)
+    GET  /memory?q&type&project        "What JARVIS Knows" (SPEC §8.4), /memory/{id}
+    POST /memory/{id}/correct|forget|pin|unpin|temporary, /memory/forget_since, /memory/policy
 
 The UI only ever sees events that are already persisted (SECURITY.md §3), and the API never
 executes anything itself - every side effect goes through the ExecutionGateway.
@@ -30,6 +32,7 @@ from pydantic import BaseModel, Field
 from core.agents import AgentRun, RunOutcome
 from core.capabilities.gateway import InvocationStatus
 from core.events.envelope import Event
+from core.memory import MemoryPolicyError, MemoryType
 from core.missions import InvalidTransition, MissionNotFound, MissionStatus
 from core.permissions import ApprovalError, ApprovalProof, PolicyViolation, ProofMethod
 from core.runtime import CoreRuntime
@@ -63,6 +66,29 @@ class ProofIn(BaseModel):
 
 class DenyIn(BaseModel):
     reason: str | None = None
+
+
+class CorrectIn(BaseModel):
+    value: str = Field(min_length=1, max_length=4000)
+
+
+class TemporaryIn(BaseModel):
+    ttl_s: int = Field(gt=0)
+
+
+class ForgetSinceIn(BaseModel):
+    minutes: int = Field(gt=0, le=60 * 24 * 30)
+    reason: str | None = None
+
+
+class PolicyIn(BaseModel):
+    learn_from_observation: bool | None = None
+    conversation_memory: bool | None = None
+
+
+class DontLearnIn(BaseModel):
+    subject: str = Field(min_length=1)
+    predicate: str = "*"
 
 
 def create_app(runtime: CoreRuntime) -> FastAPI:
@@ -239,6 +265,97 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             raise HTTPException(403, str(exc)) from None
         return {"halted": False}
 
+    # -- memory: "What JARVIS Knows" (SPEC §8.4) -----------------------------------------------
+
+    @app.get("/memory")
+    def memory_list(
+        q: str | None = None,
+        type: MemoryType | None = None,
+        project: str | None = None,
+        limit: int = Query(50, ge=1, le=500),
+    ) -> list[dict[str, Any]]:
+        if q:
+            return [
+                {**item.to_dict(), "score": score}
+                for score, item in runtime.memory.search(
+                    q, type=type, project_scope=project, limit=limit
+                )
+            ]
+        return [i.to_dict() for i in runtime.memory.list(type=type, project_scope=project)[:limit]]
+
+    @app.get("/memory/policy")
+    def memory_policy() -> dict[str, Any]:
+        p = runtime.memory_writer.policy
+        return {
+            "learn_from_observation": p.learn_from_observation,
+            "conversation_memory": p.conversation_memory,
+            "dont_learn": sorted(p.dont_learn),
+            "max_temporary_s": p.max_temporary_s,
+        }
+
+    @app.post("/memory/policy")
+    async def memory_policy_set(body: PolicyIn) -> dict[str, Any]:
+        p = runtime.memory_writer.policy
+        if body.learn_from_observation is not None:
+            p.learn_from_observation = body.learn_from_observation
+        if body.conversation_memory is not None:
+            p.conversation_memory = body.conversation_memory
+        await runtime.bus.publish(
+            Event.new("memory.policy_changed", "core-api", memory_policy(), correlation_id="memory")
+        )
+        return memory_policy()
+
+    @app.post("/memory/dont_learn")
+    async def memory_dont_learn(body: DontLearnIn) -> dict[str, Any]:
+        await runtime.memory_writer.dont_learn(body.subject, body.predicate)
+        return memory_policy()
+
+    @app.post("/memory/forget_since")
+    async def memory_forget_since(body: ForgetSinceIn) -> dict[str, Any]:
+        from datetime import UTC, datetime, timedelta
+
+        since = datetime.now(UTC) - timedelta(minutes=body.minutes)
+        n = await runtime.memory_writer.forget_since(since, reason=body.reason or "owner request")
+        return {"deleted": n, "since": since.isoformat()}
+
+    @app.get("/memory/{memory_id}")
+    def memory_get(memory_id: str) -> dict[str, Any]:
+        item = runtime.memory.get(memory_id)
+        if item is None:
+            raise HTTPException(404, "memory not found")
+        return item.to_dict()
+
+    @app.post("/memory/{memory_id}/correct")
+    async def memory_correct(memory_id: str, body: CorrectIn) -> dict[str, Any]:
+        try:
+            result = await runtime.memory_writer.correct(memory_id, body.value)
+        except KeyError:
+            raise HTTPException(404, "memory not found") from None
+        except (ValueError, MemoryPolicyError) as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"action": result.action, "memory": result.item.to_dict() if result.item else None}
+
+    @app.post("/memory/{memory_id}/forget")
+    async def memory_forget(memory_id: str) -> dict[str, Any]:
+        if not await runtime.memory_writer.forget(memory_id):
+            raise HTTPException(404, "memory not found")
+        return {"forgotten": memory_id}
+
+    @app.post("/memory/{memory_id}/pin")
+    async def memory_pin(memory_id: str) -> dict[str, Any]:
+        return await _memory_action(runtime, memory_id, pinned=True)
+
+    @app.post("/memory/{memory_id}/unpin")
+    async def memory_unpin(memory_id: str) -> dict[str, Any]:
+        return await _memory_action(runtime, memory_id, pinned=False)
+
+    @app.post("/memory/{memory_id}/temporary")
+    async def memory_temporary(memory_id: str, body: TemporaryIn) -> dict[str, Any]:
+        try:
+            return (await runtime.memory_writer.make_temporary(memory_id, body.ttl_s)).to_dict()
+        except KeyError:
+            raise HTTPException(404, "memory not found") from None
+
     # -- debug UI ------------------------------------------------------------------------------
 
     @app.get("/debug", response_class=HTMLResponse)
@@ -253,6 +370,13 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
 
 def _row(seq: int, ev: Event) -> dict[str, Any]:
     return {"seq": seq, **ev.to_dict()}
+
+
+async def _memory_action(runtime: CoreRuntime, memory_id: str, *, pinned: bool) -> dict[str, Any]:
+    try:
+        return (await runtime.memory_writer.pin(memory_id, pinned)).to_dict()
+    except KeyError:
+        raise HTTPException(404, "memory not found") from None
 
 
 async def _safe_transition(runtime: CoreRuntime, mid: str, to: MissionStatus, reason: str) -> None:

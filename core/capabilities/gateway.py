@@ -15,6 +15,7 @@ import asyncio
 import inspect
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -34,6 +35,10 @@ from core.permissions.model import (
 )
 
 SOURCE = "execution-gateway"
+
+# Handlers can read the correlation id (mission) of the invocation that is running them.
+current_correlation_id: ContextVar[str | None] = ContextVar("jarvis_correlation_id", default=None)
+current_actor: ContextVar[str | None] = ContextVar("jarvis_actor", default=None)
 
 
 class InvocationStatus(StrEnum):
@@ -230,6 +235,8 @@ class ExecutionGateway:
         )
         timeout_s = manifest.timeout_ms / 1000
         status = InvocationStatus.FAILED
+        tok_c = current_correlation_id.set(correlation_id)
+        tok_a = current_actor.set(actor)
         for attempt in range(1, manifest.retries + 2):
             inv.attempts = attempt
             try:
@@ -245,6 +252,8 @@ class ExecutionGateway:
             except Exception as exc:  # isolate tool failures; the gateway itself never crashes
                 inv.error = f"{type(exc).__name__}: {exc}"
                 status = InvocationStatus.FAILED
+        current_correlation_id.reset(tok_c)
+        current_actor.reset(tok_a)
         cap.health.record(status is InvocationStatus.SUCCEEDED, inv.error)
         return await self._finish(inv, status, env)
 

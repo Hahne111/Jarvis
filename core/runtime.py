@@ -20,6 +20,7 @@ from core.capabilities import CapabilityRegistry, ExecutionGateway, register_moc
 from core.events import EventBus, SQLEventStore
 from core.intents.router import IntentRouter
 from core.memory import HashingEmbedder, MemoryStore, MemoryWriter
+from core.memory.capabilities import register_memory_capabilities, register_memory_verifiers
 from core.missions import MissionEngine, MissionRepository
 from core.models import (
     ClaudeProvider,
@@ -79,9 +80,13 @@ class CoreRuntime:
         bus = EventBus(store)
         missions = MissionEngine(bus, MissionRepository(engine=store.engine))
         permissions = PermissionEngine(bus, policy)
-        capabilities = register_mocks(CapabilityRegistry())
+        memory = MemoryStore(engine=store.engine, embedder=HashingEmbedder())
+        memory_writer = MemoryWriter(memory, bus)
+        capabilities = register_memory_capabilities(
+            register_mocks(CapabilityRegistry()), memory, memory_writer
+        )
         gateway = ExecutionGateway(capabilities, permissions, bus)
-        verifiers = register_mock_verifiers(VerifierRegistry())
+        verifiers = register_memory_verifiers(register_mock_verifiers(VerifierRegistry()), memory)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -89,8 +94,6 @@ class CoreRuntime:
             providers, router = _default_providers(
                 provider or os.environ.get("JARVIS_PROVIDER"), router
             )
-        memory = MemoryStore(engine=store.engine, embedder=HashingEmbedder())
-        memory_writer = MemoryWriter(memory, bus)
         coordinator = AgentCoordinator(
             bus=bus,
             executor=executor,
@@ -98,6 +101,7 @@ class CoreRuntime:
             router=router,
             providers=providers,
             permissions=permissions,
+            memory=memory,
         )
         return cls(
             store=store,

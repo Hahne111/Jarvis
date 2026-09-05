@@ -35,7 +35,7 @@ def cmd(client: TestClient, text: str, **kw):
 def test_health_and_redaction(runtime, client):
     h = client.get("/health").json()
     assert h["status"] == "ok" and h["version"] == runtime.version and h["halted"] is False
-    assert set(h["capabilities"]) == {"mock.clock", "mock.echo", "mock.open_url"}
+    assert {"mock.clock", "mock.echo", "mock.open_url", "memory.recall"} <= set(h["capabilities"])
     from core.runtime import _redact
 
     assert (

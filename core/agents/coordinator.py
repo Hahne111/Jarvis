@@ -29,6 +29,8 @@ from core.capabilities.gateway import InvocationStatus
 from core.capabilities.registry import CapabilityRegistry
 from core.events.bus import EventBus
 from core.events.envelope import DEFAULT_USER_ID, Event, Priority, Sensitivity
+from core.memory.context import ContextBuilder
+from core.memory.store import MemoryStore
 from core.models.budget import AgentBudget, BudgetExceeded, BudgetTracker
 from core.models.provider import (
     IntelligenceProvider,
@@ -57,6 +59,7 @@ class AgentCoordinator:
         permissions: PermissionEngine | None = None,
         allow_delegation: bool = True,
         max_subagents_per_step: int = 4,
+        memory: MemoryStore | None = None,
     ) -> None:
         self._bus = bus
         self._executor = executor
@@ -67,6 +70,7 @@ class AgentCoordinator:
         self._permissions = permissions
         self._delegation = allow_delegation
         self._max_sub = max_subagents_per_step
+        self._context = ContextBuilder(memory) if memory is not None else None
 
     # -- availability --------------------------------------------------------------------------
 
@@ -119,15 +123,37 @@ class AgentCoordinator:
             user_id,
             device_id,
         )
+        env = {"user_id": user_id, "device_id": device_id, "device_trusted": device_trusted}
+        system = await self._with_context(
+            self._system, goal, run, cloud=not decision.model.local, env=env
+        )
         state = {
             "run": run,
             "messages": [Message("user", goal)],
             "tracker": BudgetTracker(budget or AgentBudget()),
-            "env": {"user_id": user_id, "device_id": device_id, "device_trusted": device_trusted},
+            "env": env,
             "allow": allow,
-            "system": self._system,
+            "system": system,
         }
         return await self._loop(provider, state)
+
+    async def _with_context(
+        self, system: str, goal: str, run: AgentRun, *, cloud: bool, env: dict[str, Any]
+    ) -> str:
+        """Append relevant memory to the system prompt and record which items were used."""
+        if self._context is None:
+            return system
+        block = self._context.build(goal, cloud=cloud)
+        if block.empty:
+            return system
+        await self._emit(
+            "memory.context_used",
+            {"run_id": run.run_id, "memory_ids": block.memory_ids, "cloud": cloud},
+            run.mission_id,
+            env["user_id"],
+            env["device_id"],
+        )
+        return f"{system}\n\n{block.text}"
 
     async def delegate(self, parent_state: dict[str, Any], role_name: str, goal: str) -> AgentRun:
         """Run a context-isolated sub-run for ``role`` sharing the parent's mission and budget."""
@@ -164,13 +190,16 @@ class AgentCoordinator:
             env["user_id"],
             env["device_id"],
         )
+        system = await self._with_context(
+            f"{self._system}\n\n{role.prompt}", goal, run, cloud=not decision.model.local, env=env
+        )
         state = {
             "run": run,
             "messages": [Message("user", goal)],
             "tracker": parent_state["tracker"],  # one mission budget for the whole tree
             "env": env,
             "allow": allow,
-            "system": f"{self._system}\n\n{role.prompt}",
+            "system": system,
         }
         return await self._loop(provider, state)
 

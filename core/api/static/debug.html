@@ -24,6 +24,9 @@
   <div id="result"></div>
   <h4>PENDING APPROVALS</h4><div id="appr">none</div>
   <h4>MISSIONS</h4><div id="missions"></div>
+  <h4>WHAT JARVIS KNOWS</h4>
+  <div class="row"><input id="memq" placeholder="search memory…" onkeydown="if(event.key==='Enter')refresh()"><button onclick="forgetSince()">forget 30 min</button></div>
+  <div id="memory"></div>
  </div>
 </main>
 <script>
@@ -39,7 +42,13 @@ async function refresh(){const h=await j('/health');document.getElementById('hea
   `<span class="${h.halted?'bad':'ok'}">${h.status}</span> v${h.version} · events ${h.events} · pending ${h.pending_approvals}`;
  const a=await j('/approvals');document.getElementById('appr').innerHTML=a.length?a.map(d=>`<div class="appr">${d.request.action} ${JSON.stringify(d.request.context.args||{})}<br>P${d.request.risk} · needs strength ${d.required_strength}<div class="row">
   <button onclick="approve('${d.decision_id}','ui_confirm')">confirm</button><button onclick="approve('${d.decision_id}','passkey')">passkey</button><button onclick="deny('${d.decision_id}')">deny</button></div></div>`).join(''):'none';
- const m=await j('/missions');document.getElementById('missions').innerHTML=m.slice(-8).reverse().map(x=>`<div>${x.status.padEnd(20,'·')} ${x.goal}</div>`).join('')}
+ const m=await j('/missions');document.getElementById('missions').innerHTML=m.slice(-8).reverse().map(x=>`<div>${x.status.padEnd(20,'·')} ${x.goal}</div>`).join('');loadMemory()}
+async function loadMemory(){const q=document.getElementById('memq').value;const m=await j('/memory'+(q?`?q=${encodeURIComponent(q)}`:''));
+ document.getElementById('memory').innerHTML=m.length?m.slice(0,12).map(x=>`<div class="appr">${x.pinned?'📌 ':''}[${x.type} · ${x.confidence} · ${x.source}] ${x.subject} ${x.predicate}: ${typeof x.value==='string'?x.value:JSON.stringify(x.value)}<div class="row">
+  <button onclick="memAct('${x.memory_id}','${x.pinned?'unpin':'pin'}')">${x.pinned?'unpin':'pin'}</button><button onclick="memCorrect('${x.memory_id}')">correct</button><button onclick="memAct('${x.memory_id}','forget')">forget</button></div></div>`).join(''):'nothing learned yet'}
+async function memAct(id,a){await j(`/memory/${id}/${a}`,{method:'POST'});loadMemory()}
+async function memCorrect(id){const v=prompt('Corrected value:');if(v)await j(`/memory/${id}/correct`,{method:'POST',body:JSON.stringify({value:v})});loadMemory()}
+async function forgetSince(){if(confirm('Forget everything learned in the last 30 minutes?')){await j('/memory/forget_since',{method:'POST',body:JSON.stringify({minutes:30,reason:'debug ui'})});loadMemory()}}
 async function send(){const text=document.getElementById('cmd').value;if(!text)return;
  const r=await j('/commands',{method:'POST',body:JSON.stringify({text,device_id:'debug-ui',device_trusted:document.getElementById('trusted').checked})});
  document.getElementById('result').textContent=JSON.stringify({route:r.route,status:r.status,result:r.result,error:r.error,decision_id:r.decision_id},null,1);document.getElementById('cmd').value='';refresh()}
@@ -48,5 +57,5 @@ async function approve(id,m){await j(`/approvals/${id}/approve`,{method:'POST',b
 async function deny(id){await j(`/approvals/${id}/deny`,{method:'POST',body:JSON.stringify({reason:'debug deny'})});refresh()}
 async function kill(){await j('/kill',{method:'POST'});refresh()}
 async function resume(){await j('/resume',{method:'POST',body:JSON.stringify(proof('passkey'))});refresh()}
-connect();refresh();
+connect();refresh();loadMemory();
 </script></body></html>
