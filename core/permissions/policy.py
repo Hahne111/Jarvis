@@ -55,12 +55,20 @@ class Policy:
     ask_ttl_s: dict[ApprovalStrength, int] = field(default_factory=lambda: dict(DEFAULT_ASK_TTL_S))
 
     def __post_init__(self) -> None:
+        # Normalise so plain strings/ints from config behave exactly like the enums.
+        normalised = {RiskLevel(r): Decision(d) for r, d in self.overrides.items()}
+        object.__setattr__(self, "overrides", normalised)
+        object.__setattr__(self, "forbidden_actions", frozenset(self.forbidden_actions))
+        object.__setattr__(self, "ask_actions", frozenset(self.ask_actions))
+        object.__setattr__(
+            self, "ask_ttl_s", {ApprovalStrength(k): int(v) for k, v in self.ask_ttl_s.items()}
+        )
         for risk, decision in self.overrides.items():
-            base = DEFAULT_RULES[RiskLevel(risk)][0]
-            if STRICTNESS[Decision(decision)] < STRICTNESS[base]:
+            base = DEFAULT_RULES[risk][0]
+            if STRICTNESS[decision] < STRICTNESS[base]:
                 raise PolicyViolation(
-                    f"override for {RiskLevel(risk).name} would loosen policy "
-                    f"({base.value} -> {Decision(decision).value})"
+                    f"override for {risk.name} would loosen policy "
+                    f"({base.value} -> {decision.value})"
                 )
         if self.grant_ttl_s <= 0 or self.grant_ttl_s > DEFAULT_GRANT_TTL_S:
             raise PolicyViolation(f"grant_ttl_s must be in 1..{DEFAULT_GRANT_TTL_S}")

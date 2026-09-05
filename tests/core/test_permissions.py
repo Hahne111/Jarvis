@@ -107,6 +107,14 @@ def test_policy_overrides_may_only_tighten():
         Policy(ask_ttl_s={ApprovalStrength.STRONG: 10_000})
 
 
+def test_policy_accepts_plain_strings_from_config():
+    engine, _, _ = make(Policy(overrides={"1": "ask"}, forbidden_actions=["x.forbidden"]))  # type: ignore[arg-type]
+    d = run(engine.evaluate(req(RiskLevel.P1)))
+    assert d.decision is Decision.ASK and d.required_strength is ApprovalStrength.UI_CONFIRM
+    assert d.expires_at is not None
+    assert run(engine.evaluate(req(RiskLevel.P1, "x.forbidden"))).decision is Decision.DENY
+
+
 def test_engine_tighten_applies_and_rejects_loosening():
     engine, _, _ = make()
     engine.tighten(overrides={RiskLevel.P2: Decision.ASK}, ask_actions={"web.fetch"})

@@ -19,7 +19,7 @@ Eine Session = genau ein abgegrenzter Milestone mit Definition of Done (SPEC §2
 
 ## Repo-Layout (Ist)
 - `jarvis/` – bestehender Voice-Prototyp (Wake → Whisper → LLM+Tools → Kokoro, FastAPI-UI). **Legacy-Pfad, unverändert lassen** (ADR-0001). Wird capability-weise hinter den Core migriert.
-- `core/` – neuer JARVIS Core (Phase 1 läuft): `core/events/` (Envelope, EventBus, SQLEventStore) `core/missions/` (Mission/Task-Modelle, State Machine, MissionEngine, Repository) `core/permissions/` (P0–P6, Policy nur verschärfbar, Approval-Workflow, PermissionEngine) und `core/capabilities/` (Manifest, Registry, Mocks `mock.echo`/`mock.clock`/`mock.open_url`, ExecutionGateway mit Timeout/Retry/Kill Switch) vorhanden; api, state, memory, models, agents, capabilities, verifier, scheduler folgen. Eigene Abhängigkeiten: `core/requirements.txt`.
+- `core/` – neuer JARVIS Core (Phase 1 läuft): `core/events/` (Envelope, EventBus, SQLEventStore) `core/missions/` (Mission/Task-Modelle, State Machine, MissionEngine, Repository) `core/permissions/` (P0–P6, Policy nur verschärfbar, Approval-Workflow, PermissionEngine) `core/capabilities/` (Manifest, Registry, Mocks `mock.echo`/`mock.clock`/`mock.open_url`, ExecutionGateway mit Timeout/Retry/Kill Switch) und `core/verifier/` (Outcome, VerifierRegistry, VerificationService, RetryPolicy, VerifiedExecutor) vorhanden; api, state, memory, models, agents, capabilities, verifier, scheduler folgen. Eigene Abhängigkeiten: `core/requirements.txt`.
 - `adapters/`, `voice/`, `apps/`, `skills/`, `mcp/`, `packages/` – gemäß SPEC §20, entstehen phasenweise.
 - `infra/docker/` – Docker Compose (PostgreSQL + pgvector). `.env` lokal aus `.env.example`.
 - `tests/` – Prototyp-Tests (`tests/test_*.py`), Core-Tests unter `tests/core/`.
