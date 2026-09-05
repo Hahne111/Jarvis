@@ -13,6 +13,7 @@ Endpoints
     GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
     GET  /debug                        minimal debug dashboard (static HTML)
     GET  /hud/                         web-first HUD shell (apps/desktop/web, ADR-0003)
+    GET  /workspace/{mission}/files|file|diff|preview/{path}   read-only coding-mode views
     GET  /memory?q&type&project        "What JARVIS Knows" (SPEC §8.4), /memory/{id}
     POST /memory/{id}/correct|forget|pin|unpin|temporary, /memory/forget_since, /memory/policy
 
@@ -27,8 +28,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from adapters.workspace import WorkspaceError
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -40,6 +42,21 @@ from core.permissions import ApprovalError, ApprovalProof, PolicyViolation, Proo
 from core.runtime import CoreRuntime
 
 _STATIC = Path(__file__).parent / "static"
+_PREVIEW_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".txt": "text/plain",
+    ".md": "text/plain",
+}
 _HUD = Path(__file__).resolve().parents[2] / "apps" / "desktop" / "web"
 
 
@@ -310,6 +327,52 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             return (await runtime.memory_writer.make_temporary(memory_id, body.ttl_s)).to_dict()
         except KeyError:
             raise HTTPException(404, "memory not found") from None
+
+    # -- workspace views for the HUD coding mode (read-only; writes/runs go through the gate) ---
+
+    @app.get("/workspace/{mission_id}/files")
+    def workspace_files(mission_id: str) -> dict[str, Any]:
+        try:
+            files = runtime.workspaces.list(mission_id)
+        except WorkspaceError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"mission_id": mission_id, "files": files}
+
+    @app.get("/workspace/{mission_id}/file")
+    def workspace_file(mission_id: str, path: str) -> dict[str, Any]:
+        try:
+            content = runtime.workspaces.read(mission_id, path)
+        except WorkspaceError as exc:
+            raise HTTPException(404 if "no such" in str(exc) else 400, str(exc)) from None
+        return {"path": path, "content": content}
+
+    @app.get("/workspace/{mission_id}/diff")
+    def workspace_diff(mission_id: str, path: str) -> dict[str, Any]:
+        try:
+            return {"path": path, "diff": runtime.workspaces.diff(mission_id, path)}
+        except WorkspaceError as exc:
+            raise HTTPException(404 if "no such" in str(exc) else 400, str(exc)) from None
+
+    @app.get("/workspace/{mission_id}/preview/{path:path}")
+    def workspace_preview(mission_id: str, path: str) -> Response:
+        """Serve a workspace file for the preview iframe (sandboxed CSP, no caching)."""
+        try:
+            target = runtime.workspaces.resolve(mission_id, path or "index.html", must_exist=True)
+        except WorkspaceError as exc:
+            raise HTTPException(404, str(exc)) from None
+        if target.is_dir():
+            target = target / "index.html"
+            if not target.is_file():
+                raise HTTPException(404, "no index.html")
+        media = _PREVIEW_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        headers = {
+            "Content-Security-Policy": (
+                "sandbox allow-scripts; default-src 'self' 'unsafe-inline' data: blob:"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        }
+        return Response(content=target.read_bytes(), media_type=media, headers=headers)
 
     # -- debug UI ------------------------------------------------------------------------------
 

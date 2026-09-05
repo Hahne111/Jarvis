@@ -201,3 +201,47 @@ def test_workspace_capabilities_through_gateway_and_verifiers(rt):
     )
     assert rej.invocation.status is InvocationStatus.FAILED and "allowlist" in rej.invocation.error
     assert os.path.isdir(os.path.join(rt.workspaces.root, "m1", ".jarvis", "versions"))
+
+
+def test_workspace_views_and_sandboxed_preview_for_the_hud(rt):
+    from core.api import create_app
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app(rt))
+    run(
+        rt.executor.run(
+            "workspace.write",
+            {"path": "index.html", "content": "<h1>hi</h1><script>document.title='x'</script>"},
+            **kw(),
+        )
+    )
+    run(rt.executor.run("workspace.write", {"path": "app.js", "content": "console.log(1)"}, **kw()))
+    files = client.get("/workspace/m1/files").json()["files"]
+    assert [f["path"] for f in files] == ["app.js", "index.html"]
+    assert (
+        client.get("/workspace/m1/file", params={"path": "app.js"}).json()["content"]
+        == "console.log(1)"
+    )
+    assert client.get("/workspace/m1/file", params={"path": "../x"}).status_code == 400
+    assert client.get("/workspace/m1/file", params={"path": "nope.js"}).status_code == 404
+    first_diff = client.get("/workspace/m1/diff", params={"path": "app.js"}).json()["diff"]
+    assert first_diff.startswith("--- a/app.js") and "+console.log(1)" in first_diff  # new file
+    assert client.get("/workspace/bad id!/files").status_code == 400
+
+    r = client.get("/workspace/m1/preview/index.html")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert (
+        r.headers["content-security-policy"].startswith("sandbox")
+        and r.headers["cache-control"] == "no-store"
+    )
+    assert (
+        client.get("/workspace/m1/preview/app.js")
+        .headers["content-type"]
+        .startswith("text/javascript")
+    )
+    assert client.get("/workspace/m1/preview/").status_code == 200  # directory -> index.html
+    assert client.get("/workspace/m1/preview/../../etc/passwd").status_code == 404
+    assert client.get("/workspace/m1/preview/missing.png").status_code == 404
+    assert client.get("/workspace/m2/preview/index.html").status_code == 404  # other mission
+    hud = client.get("/hud/").text
+    assert 'id="codingPanel"' in hud and "previewFrame" in hud and 'sandbox="allow-scripts"' in hud

@@ -12,8 +12,8 @@ body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#0f1a26 0%,var
 button{background:#111a24;color:var(--text);border:1px solid #27394a;padding:6px 12px;font:600 12px var(--sans);letter-spacing:.08em;cursor:pointer;border-radius:3px}
 button:hover{border-color:var(--cyan)} button.danger{border-color:var(--red);color:var(--red)} button.primary{border-color:var(--amber);color:var(--amber)}
 input,select{background:#0b1218;color:var(--text);border:1px solid #27394a;padding:6px 8px;font:14px var(--sans);border-radius:3px}
-.grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:12px;padding:12px;height:calc(100% - 48px)}
-.core-panel{grid-row:1/3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(87,215,255,.04),transparent);border-radius:6px;padding:16px}
+.grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;grid-template-rows:1fr 1fr 1.2fr;gap:12px;padding:12px;height:calc(100% - 48px)}
+.core-panel{grid-row:1/4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(87,215,255,.04),transparent);border-radius:6px;padding:16px}
 .panel{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;min-height:0}
 .panel h2{margin:0 0 8px;font:700 12px var(--sans);letter-spacing:.16em;color:var(--muted);display:flex;align-items:center;gap:8px}
 .panel h2 .count{background:var(--amber-dim);color:var(--amber);border-radius:10px;padding:0 8px;font-size:11px}
@@ -45,5 +45,12 @@ body[data-state=awaiting_approval] .nucleus{background:radial-gradient(circle,va
 body[data-state=halted] .nucleus{background:radial-gradient(circle,var(--red) 0%,#5a1414 60%,transparent 72%);animation:none;box-shadow:0 0 30px 4px rgba(255,92,92,.4)}
 body[data-state=halted] .ring{animation-play-state:paused;border-color:#5a2a2a}
 @keyframes spin{to{transform:rotate(360deg)}} @keyframes breathe{50%{transform:scale(1.08)}} @keyframes pulse{50%{transform:scale(1.18)}}
+/* coding mode (SPEC §12.1): tree + editor/diff/terminal/preview fed only by workspace.* events */
+.coding{grid-column:2/4} .tabs{margin-left:auto;display:flex;gap:4px} .tabs button{padding:3px 8px;font-size:11px} .tabs button.active{border-color:var(--amber);color:var(--amber)}
+.coding-body{display:grid;grid-template-columns:220px 1fr;gap:10px;min-height:0;flex:1}
+.tree div{padding:2px 4px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .tree div:hover,.tree div.active{color:var(--cyan)} .tree .dir{color:var(--muted)}
+.coding-main{min-height:0;display:flex} .code{margin:0;flex:1;overflow:auto;background:#070b10;border:1px solid var(--line);border-radius:4px;padding:10px;font:12px/1.45 var(--mono);white-space:pre}
+.code.term .err{color:var(--red)} .code .add{color:var(--green)} .code .del{color:var(--red)} .code .hunk{color:var(--cyan)}
+#previewFrame{flex:1;border:1px solid var(--line);border-radius:4px;background:#fff}
 @media (prefers-reduced-motion:reduce){.ring,.nucleus{animation:none!important}}
 @media (max-width:1100px){.grid{grid-template-columns:1fr 1fr;grid-template-rows:auto}.core-panel{grid-row:auto;grid-column:1/3}}

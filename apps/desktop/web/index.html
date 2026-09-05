@@ -62,6 +62,25 @@
     <h2>WHAT JARVIS KNOWS <input id="memQuery" placeholder="search…" aria-label="Search memory"></h2>
     <div id="memory" class="list"></div>
   </section>
+
+  <section class="panel coding" id="codingPanel">
+    <h2>CODING
+      <select id="codingMission" aria-label="Mission workspace"></select>
+      <nav class="tabs" id="codingTabs">
+        <button data-tab="files" class="active">FILES</button><button data-tab="diff">DIFF</button>
+        <button data-tab="terminal">TERMINAL</button><button data-tab="preview">PREVIEW</button>
+      </nav>
+    </h2>
+    <div class="coding-body">
+      <div id="fileTree" class="list tree"></div>
+      <div class="coding-main">
+        <pre id="codeView" class="code" data-tab="files"><code>Select a file…</code></pre>
+        <pre id="diffView" class="code" data-tab="diff" hidden><code>No diff yet.</code></pre>
+        <pre id="terminalView" class="code term" data-tab="terminal" hidden><code></code></pre>
+        <iframe id="previewFrame" data-tab="preview" hidden sandbox="allow-scripts" title="Preview" referrerpolicy="no-referrer"></iframe>
+      </div>
+    </div>
+  </section>
 </main>
 <script type="module" src="/hud/hud.js"></script>
 </body>

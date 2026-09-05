@@ -84,8 +84,62 @@ function ingest(e) {
     dirty.latency = true;
   }
   if (e.type.startsWith("mission.") || e.type.startsWith("permission.") || e.type.startsWith("memory.")) queueRefresh();
+  if (e.type.startsWith("workspace.")) coding.onEvent(e);
   scheduleRender();
 }
+
+// -------- coding mode (SPEC §12.1) --------------------------------------------------------------
+const coding = {
+  mission: null, file: null, tab: "files", term: [], dirty: false,
+  onEvent(e) {
+    if (e.type === "workspace.file.changed" && (!this.mission || e.correlation_id === this.mission)) {
+      this.mission ||= e.correlation_id;
+      this.dirty = true; queueCoding();
+      if (e.payload.path === this.file) this.loadFile(this.file);
+      $("diffView").querySelector("code").innerHTML = colorDiff(e.payload.diff || "");
+    }
+    if (e.type === "workspace.run.started" && e.correlation_id === this.mission) { this.term = [`$ ${e.payload.command} ${(e.payload.args || []).join(" ")}\n`]; this.renderTerm(); }
+    if (e.type === "workspace.run.output" && e.correlation_id === this.mission) { this.term.push(e.payload.stream === "stderr" ? `\u0001${e.payload.chunk}` : e.payload.chunk); this.renderTerm(); }
+    if (e.type === "workspace.run.finished" && e.correlation_id === this.mission) { this.term.push(`\n[exit ${e.payload.exit_code}${e.payload.timed_out ? " · timeout" : ""} · ${e.payload.duration_ms} ms]\n`); this.renderTerm(); }
+  },
+  renderTerm() {
+    const code = $("terminalView").querySelector("code");
+    code.innerHTML = this.term.map((c) => c.startsWith("\u0001") ? `<span class="err">${esc(c.slice(1))}</span>` : esc(c)).join("");
+    $("terminalView").scrollTop = $("terminalView").scrollHeight;
+  },
+  async refresh() {
+    const missions = await api("/missions");
+    const sel = $("codingMission");
+    const current = this.mission || (missions.length ? missions[missions.length - 1].mission_id : null);
+    sel.innerHTML = missions.slice(-20).reverse().map((m) => `<option value="${m.mission_id}" ${m.mission_id === current ? "selected" : ""}>${short(m.mission_id)} · ${esc(m.goal).slice(0, 40)}</option>`).join("");
+    if (!current) return;
+    this.mission = current;
+    const { files } = await api(`/workspace/${current}/files`).catch(() => ({ files: [] }));
+    $("fileTree").innerHTML = files.length ? files.map((f) => `<div class="${f.dir ? "dir" : "file"} ${f.path === this.file ? "active" : ""}" data-path="${f.path}" data-dir="${f.dir}">${f.dir ? "▸ " : ""}${esc(f.path)}</div>`).join("") : `<div class="empty">Empty workspace.</div>`;
+    const html = files.find((f) => !f.dir && f.path.endsWith("index.html"));
+    $("previewFrame").src = html ? `/workspace/${current}/preview/${html.path}` : "about:blank";
+  },
+  async loadFile(path) {
+    this.file = path;
+    const { content } = await api(`/workspace/${this.mission}/file?path=${encodeURIComponent(path)}`);
+    $("codeView").querySelector("code").textContent = content;
+    const { diff } = await api(`/workspace/${this.mission}/diff?path=${encodeURIComponent(path)}`);
+    $("diffView").querySelector("code").innerHTML = diff ? colorDiff(diff) : "No changes since the last version.";
+    for (const el of $("fileTree").children) el.classList.toggle("active", el.dataset.path === path);
+  },
+  showTab(tab) {
+    this.tab = tab;
+    for (const el of document.querySelectorAll('.coding-main [data-tab]')) el.hidden = el.dataset.tab !== tab;
+    for (const b of $("codingTabs").children) b.classList.toggle("active", b.dataset.tab === tab);
+  },
+};
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const colorDiff = (d) => esc(d).split("\n").map((l) => l.startsWith("+") && !l.startsWith("+++") ? `<span class="add">${l}</span>` : l.startsWith("-") && !l.startsWith("---") ? `<span class="del">${l}</span>` : l.startsWith("@@") ? `<span class="hunk">${l}</span>` : l).join("\n");
+let codingTimer = null;
+function queueCoding() { if (!codingTimer) codingTimer = setTimeout(() => { codingTimer = null; coding.refresh(); }, 200); }
+$("codingTabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) coding.showTab(b.dataset.tab); });
+$("codingMission").addEventListener("change", (e) => { coding.mission = e.target.value; coding.file = null; coding.refresh(); });
+$("fileTree").addEventListener("click", (e) => { const d = e.target.closest("div[data-path]"); if (d && d.dataset.dir !== "true") { coding.loadFile(d.dataset.path); coding.showTab("files"); } });
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws/events?after_seq=${state.lastSeq}`);
   ws.onopen = () => { $("status").textContent = "live"; };
@@ -144,4 +198,4 @@ $("railFilter").addEventListener("change", (e) => { state.filter = e.target.valu
 $("memQuery").addEventListener("input", queueRefresh);
 
 // -------- boot ------------------------------------------------------------------------------
-connect(); refreshHealth(); refreshLists(); setInterval(refreshHealth, 5000);
+connect(); refreshHealth(); refreshLists(); coding.refresh(); setInterval(refreshHealth, 5000);
