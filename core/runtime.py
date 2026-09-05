@@ -19,6 +19,7 @@ from core.agents import AgentCoordinator
 from core.capabilities import CapabilityRegistry, ExecutionGateway, register_mocks
 from core.events import EventBus, SQLEventStore
 from core.intents.router import IntentRouter
+from core.memory import HashingEmbedder, MemoryStore, MemoryWriter
 from core.missions import MissionEngine, MissionRepository
 from core.models import (
     ClaudeProvider,
@@ -54,6 +55,8 @@ class CoreRuntime:
     router: ModelRouter
     providers: dict[str, IntelligenceProvider]
     coordinator: AgentCoordinator
+    memory: MemoryStore
+    memory_writer: MemoryWriter
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -86,6 +89,8 @@ class CoreRuntime:
             providers, router = _default_providers(
                 provider or os.environ.get("JARVIS_PROVIDER"), router
             )
+        memory = MemoryStore(engine=store.engine, embedder=HashingEmbedder())
+        memory_writer = MemoryWriter(memory, bus)
         coordinator = AgentCoordinator(
             bus=bus,
             executor=executor,
@@ -108,6 +113,8 @@ class CoreRuntime:
             router=router,
             providers=providers,
             coordinator=coordinator,
+            memory=memory,
+            memory_writer=memory_writer,
             db_url=url,
         )
 
@@ -117,7 +124,13 @@ class CoreRuntime:
             "permissions": self.permissions.rebuild_from_log(),
             "missions": len(self.missions.list()),
             "events": self.store.count(),
+            "session_memory_dropped": self._drop_session_memory(),
         }
+
+    def _drop_session_memory(self) -> int:
+        import asyncio
+
+        return asyncio.run(self.memory_writer.drop_session_memory())
 
     def health(self) -> dict[str, Any]:
         return {
@@ -130,6 +143,7 @@ class CoreRuntime:
             "pending_approvals": len(self.permissions.pending()),
             "providers": {n: p.available() for n, p in self.providers.items()},
             "agent_ready": self.coordinator.can_run(),
+            "memory_items": self.memory.count(),
             "capabilities": self.capabilities.health(),
         }
 
