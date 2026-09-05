@@ -19,7 +19,7 @@ Eine Session = genau ein abgegrenzter Milestone mit Definition of Done (SPEC §2
 
 ## Repo-Layout (Ist)
 - `jarvis/` – bestehender Voice-Prototyp (Wake → Whisper → LLM+Tools → Kokoro, FastAPI-UI). **Legacy-Pfad, unverändert lassen** (ADR-0001). Wird capability-weise hinter den Core migriert.
-- `core/` – neuer JARVIS Core (ab Phase 1): api, state, events, missions, permissions, memory, models, agents, capabilities, verifier, scheduler.
+- `core/` – neuer JARVIS Core (Phase 1 läuft): `core/events/` (Envelope, EventBus, SQLEventStore) vorhanden; api, state, missions, permissions, memory, models, agents, capabilities, verifier, scheduler folgen. Eigene Abhängigkeiten: `core/requirements.txt`.
 - `adapters/`, `voice/`, `apps/`, `skills/`, `mcp/`, `packages/` – gemäß SPEC §20, entstehen phasenweise.
 - `infra/docker/` – Docker Compose (PostgreSQL + pgvector). `.env` lokal aus `.env.example`.
 - `tests/` – Prototyp-Tests (`tests/test_*.py`), Core-Tests unter `tests/core/`.
@@ -33,10 +33,11 @@ install.bat             # Windows
 # Linux-CI-Systemabhängigkeiten: libportaudio2 python3-tk xvfb (pyautogui/sounddevice brauchen Display + PortAudio)
 
 # Tests
-pytest -q               # Linux headless: xvfb-run -a pytest -q
+pytest -q               # alles; Linux headless: xvfb-run -a pytest -q
+pytest -q tests/core    # nur Core (braucht nur core/requirements.txt, Python 3.12)
 
 # Lint / Format (Konfiguration: ruff.toml)
-ruff check .            # Fatal-Regeln überall, volle Regeln für core/ adapters/ voice/ tests/core/
+ruff check .            # Fatal-Regeln im Altcode; strikt für core/ und tests/core/ (core/ruff.toml, tests/core/ruff.toml)
 ruff format --check .   # Legacy-Dateien (jarvis/, bestehende tests/test_*.py) ausgenommen
 
 # Datenbank (Phase 1+)

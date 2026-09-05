@@ -1,0 +1,4 @@
+# Runtime dependencies of the JARVIS Core process (Python 3.12 target, 3.11 compatible).
+# Kept separate from the voice prototype's requirements.txt (ADR-0001).
+sqlalchemy>=2.0.0
+pytest>=8.0.0

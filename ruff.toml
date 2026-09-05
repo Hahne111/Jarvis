@@ -8,8 +8,7 @@ extend-exclude = [".venv", "venv", "jarvis/data"]
 # Fatal-Regeln gelten überall: Syntaxfehler, ungültige Literal-Vergleiche, undefinierte Namen.
 select = ["E9", "F63", "F7", "F82"]
 
-# Sobald core/ entsteht (Commit 004): select auf ["E","F","W","I","B","UP","S","ASYNC"] erweitern und
-# die Legacy-Pfade (jarvis/**, bestehende tests/test_*.py) über [lint.per-file-ignores] ausnehmen.
+# Strenge Regeln für neuen Code liegen in core/ruff.toml und tests/core/ruff.toml (hierarchische Config).
 
 [format]
 exclude = [
