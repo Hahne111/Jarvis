@@ -1,7 +1,11 @@
 """CoreRuntime: wires the Core 0.1 modules into one process (ADR-0002 modular monolith).
 
 EventBus(SQLEventStore) -> MissionEngine, PermissionEngine, CapabilityRegistry(+mocks),
-ExecutionGateway, VerifierRegistry(+mocks), VerificationService, VerifiedExecutor, IntentRouter
+ExecutionGateway, VerifierRegistry(+mocks), VerificationService, VerifiedExecutor, IntentRouter,
+ModelRouter + IntelligenceProviders -> AgentCoordinator
+
+Provider selection (env JARVIS_PROVIDER): "claude" (default; needs the anthropic SDK installed),
+"mock" (offline scripted provider for tests/dev), "none" (agent path reports BLOCKED).
 """
 
 from __future__ import annotations
@@ -11,10 +15,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core import __version__
+from core.agents import AgentCoordinator
 from core.capabilities import CapabilityRegistry, ExecutionGateway, register_mocks
 from core.events import EventBus, SQLEventStore
 from core.intents.router import IntentRouter
 from core.missions import MissionEngine, MissionRepository
+from core.models import (
+    ClaudeProvider,
+    IntelligenceProvider,
+    MockProvider,
+    ModelRouter,
+    ModelSpec,
+    Tier,
+)
 from core.permissions import PermissionEngine, Policy
 from core.verifier import (
     VerificationService,
@@ -38,13 +51,24 @@ class CoreRuntime:
     verification: VerificationService
     executor: VerifiedExecutor
     intents: IntentRouter
+    router: ModelRouter
+    providers: dict[str, IntelligenceProvider]
+    coordinator: AgentCoordinator
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
     pending_commands: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
-    def build(cls, db_url: str | None = None, policy: Policy | None = None) -> CoreRuntime:
+    def build(
+        cls,
+        db_url: str | None = None,
+        policy: Policy | None = None,
+        *,
+        provider: str | None = None,
+        providers: dict[str, IntelligenceProvider] | None = None,
+        router: ModelRouter | None = None,
+    ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
             os.makedirs(os.path.dirname(url.removeprefix("sqlite:///")) or ".", exist_ok=True)
@@ -57,6 +81,18 @@ class CoreRuntime:
         verifiers = register_mock_verifiers(VerifierRegistry())
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
+        router = router if router is not None else ModelRouter()
+        if providers is None:
+            providers, router = _default_providers(
+                provider or os.environ.get("JARVIS_PROVIDER"), router
+            )
+        coordinator = AgentCoordinator(
+            bus=bus,
+            executor=executor,
+            capabilities=capabilities,
+            router=router,
+            providers=providers,
+        )
         return cls(
             store=store,
             bus=bus,
@@ -68,6 +104,9 @@ class CoreRuntime:
             verification=verification,
             executor=executor,
             intents=IntentRouter(capabilities),
+            router=router,
+            providers=providers,
+            coordinator=coordinator,
             db_url=url,
         )
 
@@ -88,8 +127,27 @@ class CoreRuntime:
             "last_seq": self.store.last_seq(),
             "halted": self.gateway.halted,
             "pending_approvals": len(self.permissions.pending()),
+            "providers": {n: p.available() for n, p in self.providers.items()},
+            "agent_ready": self.coordinator.can_run(),
             "capabilities": self.capabilities.health(),
         }
+
+
+def _default_providers(
+    choice: str | None, router: ModelRouter
+) -> tuple[dict[str, IntelligenceProvider], ModelRouter]:
+    choice = (choice or "claude").lower()
+    if choice == "none":
+        return {}, router
+    if choice == "mock":
+        # Offline development: a scripted provider behind a "mock" model spec.
+        router = ModelRouter(
+            [ModelSpec("mock-model", "mock", Tier.FRONTIER, supports_effort=False)]
+        )
+        return {"mock": MockProvider()}, router
+    if choice == "claude":
+        return {"claude": ClaudeProvider()}, router
+    raise ValueError(f"unknown JARVIS_PROVIDER {choice!r} (claude | mock | none)")
 
 
 def _redact(url: str) -> str:
