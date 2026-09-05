@@ -1,0 +1,33 @@
+wake_word:
+  model: hey_jarvis
+  threshold: 0.5
+  chunk_size: 1280
+stt:
+  model: small
+  device: cuda
+  compute_type: int8
+llm:
+  active_provider: ollama
+  temperature: 0.7
+  providers:
+    ollama:
+      type: ollama
+      label: Ollama (Local)
+      model: qwen3:8b
+      base_url: http://localhost:11434
+context:
+  max_messages: 10
+  summarize_after: 8
+  max_tokens: 2500
+tts:
+  voice: af_heart
+  speed: 1.1
+memory:
+  db_path: jarvis/data/memory.db
+  chroma_path: jarvis/data/chroma
+  top_k: 3
+tools:
+  allowed_paths:
+  - ~/Documents
+  - ~/Desktop
+  code_timeout: 10

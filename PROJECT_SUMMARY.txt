@@ -1,0 +1,105 @@
+Jarvis Public — Project Summary
+================================
+
+Location: C:\Users\xkosiekpcwin\jarvis-public\
+Original (private): C:\Users\xkosiekpcwin\jarvis\
+Purpose: Sanitized, sellable version of Jarvis — local AI voice assistant (Iron Man style) for Windows 11.
+
+What It Does
+-------------
+Wake word ("Hey Jarvis") → STT (Whisper) → LLM (multi-provider) → TTS (Kokoro) → follow-up loop.
+Web UI at localhost:7860. 31 tools: screen vision/OCR, desktop automation, web search, file ops, code exec, app control (30+ apps), and more.
+
+Stack
+------
+- Python 3.12, virtualenv, FastAPI + WebSocket + uvicorn
+- STT: faster-whisper (tiny/small/medium/large-v3, CPU or CUDA)
+- TTS: Kokoro-82M (local CPU)
+- Wake word: openWakeWord with custom hey_jarvis_v0.1.onnx
+- LLM: Ollama (default), any OpenAI-compatible provider addable via web UI
+- Vision/OCR: PyAutoGUI + Pillow screenshots → Windows PowerShell OCR
+- Memory: SQLite + ChromaDB for fact storage
+
+Key Files
+----------
+jarvis/main.py          — Core orchestrator: wake word handler, LLM routing, abort/mute system, keyboard listener (Esc/F2/INSERT), event bus
+jarvis/web.py           — FastAPI backend: WebSocket, provider CRUD (GET/POST/PUT/DELETE), settings CRUD, mute API
+jarvis/static/index.html — Iron Man HUD web UI: arc reactor, glassmorphism, 4 tabs (Tools/Live/Actions/Config), provider management modal, settings panel
+jarvis/stt.py           — Whisper STT with speech-gated silence detection
+jarvis/tts.py           — Kokoro TTS with polling-based interrupt
+jarvis/wake.py          — openWakeWord listener
+jarvis/context.py       — Sliding window context manager
+jarvis/memory.py        — SQLite + ChromaDB fact extraction/search
+jarvis/tools/router.py  — 31 tools mapped (dispatch function)
+jarvis/tools/desktop.py — Screen vision (read_screen, find_on_screen, screenshot), mouse/keyboard, app control
+config.yaml             — All config: providers, TTS, STT, wake word, tools, context
+install.bat             — One-click installer (finds Python, creates venv, installs deps, downloads ONNX models)
+start.bat               — Launcher (activates venv, runs python -m jarvis.main)
+requirements.txt        — 18 dependencies including pillow
+
+REST APIs (web.py)
+-------------------
+GET    /api/providers          — list all providers with full details
+POST   /api/providers/{key}    — set active provider
+PUT    /api/providers/{key}    — add/update provider
+DELETE /api/providers/{key}    — delete provider (can't delete active)
+GET    /api/settings           — all config (tts, stt, wake_word, llm temp, tools)
+PUT    /api/settings           — partial update any settings section
+GET    /api/mute               — get mute state
+POST   /api/mute               — toggle mute
+WebSocket /ws                  — real-time events (chat, interrupt, tool calls, responses)
+
+Web UI Features (index.html)
+------------------------------
+- Iron Man HUD design: Orbitron/Rajdhani fonts, arc reactor SVG animation, floating particles, scan lines, cyan/gold/deep blue palette
+- 4 side panel tabs: Tools (tool call log), Live (event feed), Actions (8 quick command buttons), Config (full settings)
+- Config tab: Provider card list with activate/edit/delete, Add Provider modal (key, label, type, model, base_url, api_key), LLM temperature, TTS voice/speed, STT model/device, wake word threshold, Save button with toast
+- Controls: Provider dropdown in header, mute button, abort button, stop command (voice or typed)
+
+Abort System
+-------------
+- Esc key → abort_all() → stops TTS + tool loop + LLM calls
+- Voice "stop" → detected after transcription, triggers abort (works in wake and follow-up)
+- Web "stop" → typed in chat, triggers abort
+- Web ABORT button → sends interrupt via WebSocket
+- WebSocket handler catches _Aborted gracefully (no ASGI crashes)
+
+Security Status
+----------------
+- No API keys (only placeholder in Ollama default config)
+- No personal IPs (192.168.x.x removed)
+- No username references (xkosiekpcwin removed)
+- No personal model names (minimax etc. removed)
+- No .git, .venv, jarvis/data/, docs/plans/, make_shortcut.ps1 included
+- Config ships with only one generic Ollama provider
+- .venv/pyvenv.cfg contains local paths but is auto-generated per install (not shipped)
+
+Config (config.yaml — current state)
+--------------------------------------
+wake_word: {model: hey_jarvis, threshold: 0.5, chunk_size: 1280}
+stt: {model: tiny, device: cpu, compute_type: int8}
+llm: {active_provider: ollama, temperature: 0.7}
+  providers:
+    ollama: {type: ollama, label: "Ollama (Local)", model: qwen3:8b, base_url: http://localhost:11434}
+tts: {voice: af_heart, speed: 1.1}
+context: {max_messages: 10, summarize_after: 8, max_tokens: 2500}
+memory: {db_path: jarvis/data/memory.db, chroma_path: jarvis/data/chroma}
+tools: {allowed_paths: [~/Documents, ~/Desktop], code_timeout: 10}
+
+Known Working
+--------------
+- Wake word detection
+- STT transcription
+- TTS speech + streaming
+- Vision/OCR (read_screen, find_on_screen) — fixed with Pillow
+- Desktop automation (open apps, click, type, keys)
+- Web UI with all 4 tabs
+- Provider management via UI
+- Settings save/load via UI
+- Voice/web/keyboard abort
+- Mute toggle
+
+Requires at Runtime
+--------------------
+- Ollama running locally (ollama serve + a pulled model), OR
+- An OpenAI-compatible provider added via Config tab

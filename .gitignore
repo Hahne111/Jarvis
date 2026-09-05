@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+jarvis/data/
+.env
+*.egg-info/
+dist/
+.pytest_cache/
+.venv/
+.claude/
+
+*.log
+*.wav

@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S.</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Rajdhani:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #020810;
+    --surface: rgba(8, 18, 40, 0.85);
+    --surface2: rgba(12, 28, 60, 0.6);
+    --glass: rgba(0, 180, 255, 0.04);
+    --glass-border: rgba(0, 180, 255, 0.12);
+    --glass-border-hover: rgba(0, 212, 255, 0.3);
+    --cyan: #00d4ff;
+    --cyan-dim: rgba(0, 212, 255, 0.15);
+    --cyan-glow: rgba(0, 212, 255, 0.4);
+    --blue: #0a84ff;
+    --blue-dim: rgba(10, 132, 255, 0.15);
+    --gold: #ff9f1a;
+    --gold-dim: rgba(255, 159, 26, 0.15);
+    --red: #ff4757;
+    --red-dim: rgba(255, 71, 87, 0.15);
+    --green: #00e676;
+    --green-dim: rgba(0, 230, 118, 0.2);
+    --purple: #b388ff;
+    --text: #e0f0ff;
+    --text-dim: #5a7ea8;
+    --text-muted: #2a4060;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Rajdhani', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ─── Animated Background ─── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 20% 50%, rgba(0, 100, 255, 0.06) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 20%, rgba(0, 212, 255, 0.04) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 80%, rgba(10, 50, 120, 0.08) 0%, transparent 50%);
+    pointer-events: none; z-index: 0;
+  }
+
+  /* HUD scan lines */
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0, 180, 255, 0.015) 2px, rgba(0, 180, 255, 0.015) 4px
+    );
+    pointer-events: none; z-index: 1;
+  }
+
+  /* ─── Header ─── */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 24px;
+    background: linear-gradient(180deg, rgba(0, 20, 50, 0.9) 0%, rgba(0, 10, 30, 0.7) 100%);
+    border-bottom: 1px solid var(--glass-border);
+    flex-shrink: 0; z-index: 10;
+    backdrop-filter: blur(20px);
+  }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+
+  .logo-wrapper { display: flex; align-items: center; gap: 10px; }
+  .logo-icon { width: 32px; height: 32px; position: relative; }
+  .logo-icon svg { width: 100%; height: 100%; }
+  .logo-icon .arc-ring {
+    fill: none; stroke: var(--cyan); stroke-width: 1.5;
+    animation: arc-spin 8s linear infinite; transform-origin: center;
+  }
+  .logo-icon .arc-ring-2 {
+    fill: none; stroke: var(--blue); stroke-width: 1; opacity: 0.5;
+    animation: arc-spin 12s linear infinite reverse; transform-origin: center;
+  }
+  .logo-icon .arc-core {
+    fill: var(--cyan); filter: drop-shadow(0 0 6px var(--cyan-glow));
+  }
+  @keyframes arc-spin { to { transform: rotate(360deg); } }
+
+  .logo {
+    font-family: 'Orbitron', monospace;
+    font-size: 20px; font-weight: 700; letter-spacing: 6px; text-transform: uppercase;
+    background: linear-gradient(135deg, var(--cyan) 0%, var(--blue) 50%, var(--cyan) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    animation: shimmer 4s ease-in-out infinite;
+  }
+  @keyframes shimmer { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+
+  .logo-version {
+    font-family: 'Orbitron', monospace;
+    font-size: 9px; color: var(--text-muted); letter-spacing: 2px; margin-top: -2px;
+  }
+
+  .status-badge {
+    display: flex; align-items: center; gap: 8px;
+    font-family: 'Orbitron', monospace;
+    font-size: 10px; letter-spacing: 1px; color: var(--text-dim);
+    padding: 6px 14px; background: var(--surface2);
+    border-radius: 20px; border: 1px solid var(--glass-border);
+    backdrop-filter: blur(10px);
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-muted); transition: all 0.4s;
+  }
+  .status-dot.online {
+    background: var(--green);
+    box-shadow: 0 0 10px var(--green-dim), 0 0 20px rgba(0,230,118,0.1);
+    animation: status-pulse 3s ease-in-out infinite;
+  }
+  .status-dot.thinking {
+    background: var(--gold); box-shadow: 0 0 10px var(--gold-dim);
+    animation: think-pulse 1s ease-in-out infinite;
+  }
+  @keyframes status-pulse { 0%,100% { opacity:1; box-shadow: 0 0 10px var(--green-dim); } 50% { opacity:0.6; box-shadow: 0 0 20px var(--green-dim); } }
+  @keyframes think-pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+  .header-right { display: flex; align-items: center; gap: 10px; }
+
+  .model-select {
+    background: var(--surface2); border: 1px solid var(--glass-border); border-radius: var(--radius);
+    color: var(--text); font-size: 11px; font-family: 'Orbitron', monospace; letter-spacing: 0.5px;
+    padding: 8px 30px 8px 12px; cursor: pointer; outline: none;
+    appearance: none; -webkit-appearance: none; backdrop-filter: blur(10px);
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2300d4ff' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+    transition: all 0.3s; min-width: 180px;
+  }
+  .model-select:hover { border-color: var(--glass-border-hover); box-shadow: 0 0 15px var(--cyan-dim); }
+  .model-select:focus { border-color: var(--cyan); box-shadow: 0 0 20px var(--cyan-dim); }
+  .model-select option { background: #0a1628; color: var(--text); }
+
+  .hud-btn {
+    background: var(--surface2); border: 1px solid var(--glass-border); border-radius: var(--radius);
+    color: var(--text-dim); font-size: 18px; width: 38px; height: 38px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all 0.3s; position: relative; backdrop-filter: blur(10px);
+  }
+  .hud-btn:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 15px var(--cyan-dim); }
+  .hud-btn.muted { color: var(--red); border-color: rgba(255,71,87,0.3); box-shadow: 0 0 10px var(--red-dim); }
+  .hud-btn .mute-slash {
+    display: none; position: absolute; width: 2px; height: 22px; background: var(--red);
+    transform: rotate(45deg); border-radius: 1px;
+  }
+  .hud-btn.muted .mute-slash { display: block; }
+
+  /* ─── Main ─── */
+  .main { flex: 1; display: flex; overflow: hidden; min-height: 0; z-index: 5; }
+
+  /* ─── Chat Panel ─── */
+  .chat-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+
+  /* ─── Arc Reactor Hero ─── */
+  .reactor-hero {
+    display: flex; justify-content: center; align-items: center;
+    padding: 30px 0 10px; flex-shrink: 0;
+  }
+  .reactor { width: 120px; height: 120px; position: relative; }
+  .reactor svg { width: 100%; height: 100%; }
+  .reactor .r-outer {
+    fill: none; stroke: var(--cyan); stroke-width: 1; opacity: 0.3;
+    animation: arc-spin 20s linear infinite; transform-origin: center;
+  }
+  .reactor .r-mid {
+    fill: none; stroke: var(--cyan); stroke-width: 1.5; opacity: 0.5;
+    stroke-dasharray: 8 12; animation: arc-spin 10s linear infinite reverse; transform-origin: center;
+  }
+  .reactor .r-inner {
+    fill: none; stroke: var(--cyan); stroke-width: 2; opacity: 0.7;
+    stroke-dasharray: 4 8; animation: arc-spin 6s linear infinite; transform-origin: center;
+  }
+  .reactor .r-core {
+    fill: var(--cyan); opacity: 0.9;
+    filter: drop-shadow(0 0 15px var(--cyan)) drop-shadow(0 0 40px rgba(0,212,255,0.3));
+    animation: core-pulse 3s ease-in-out infinite;
+  }
+  .reactor .r-core-ring { fill: none; stroke: rgba(255,255,255,0.3); stroke-width: 0.5; }
+  @keyframes core-pulse { 0%,100% { opacity:0.9; } 50% { opacity:0.5; } }
+
+  .reactor.thinking .r-core { animation: core-think 0.8s ease-in-out infinite; fill: var(--gold); }
+  .reactor.thinking .r-inner { animation: arc-spin 2s linear infinite; stroke: var(--gold); }
+  .reactor.thinking .r-mid { animation: arc-spin 3s linear infinite reverse; stroke: var(--gold); }
+  @keyframes core-think {
+    0%,100% { opacity:1; filter: drop-shadow(0 0 20px var(--gold)) drop-shadow(0 0 50px rgba(255,159,26,0.4)); }
+    50% { opacity:0.4; }
+  }
+
+  /* Listening state — pulsing green */
+  .reactor.listening .r-core { animation: core-listen 1.2s ease-in-out infinite; fill: var(--green); }
+  .reactor.listening .r-inner { stroke: var(--green); opacity: 0.7; }
+  .reactor.listening .r-mid { stroke: var(--green); opacity: 0.5; }
+  @keyframes core-listen {
+    0%,100% { opacity:1; filter: drop-shadow(0 0 15px var(--green)) drop-shadow(0 0 40px rgba(0,230,118,0.3)); }
+    50% { opacity:0.5; filter: drop-shadow(0 0 25px var(--green)) drop-shadow(0 0 60px rgba(0,230,118,0.5)); }
+  }
+
+  /* Speaking state — pulsing blue */
+  .reactor.speaking .r-core { animation: core-speak 0.6s ease-in-out infinite; fill: var(--blue); }
+  .reactor.speaking .r-inner { animation: arc-spin 1.5s linear infinite; stroke: var(--blue); }
+  .reactor.speaking .r-mid { animation: arc-spin 2.5s linear infinite reverse; stroke: var(--blue); }
+  @keyframes core-speak {
+    0%,100% { opacity:1; filter: drop-shadow(0 0 18px var(--blue)) drop-shadow(0 0 45px rgba(10,132,255,0.4)); }
+    50% { opacity:0.6; }
+  }
+
+  .reactor-label {
+    position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
+    font-family: 'Orbitron', monospace;
+    font-size: 8px; letter-spacing: 3px; color: var(--text-muted);
+    text-transform: uppercase; white-space: nowrap;
+  }
+
+  /* ─── Messages ─── */
+  .messages {
+    flex: 1; overflow-y: auto; padding: 12px 24px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-track { background: transparent; }
+  .messages::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
+  .messages::-webkit-scrollbar-thumb:hover { background: var(--cyan-dim); }
+
+  .msg-wrapper {
+    display: flex; flex-direction: column;
+    animation: msg-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .msg-wrapper.right { align-items: flex-end; }
+  .msg-wrapper.left { align-items: flex-start; }
+  .msg-wrapper.center { align-items: center; }
+  @keyframes msg-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .msg-source {
+    font-family: 'Orbitron', monospace;
+    font-size: 8px; text-transform: uppercase; letter-spacing: 2px;
+    margin-bottom: 3px; padding-left: 4px;
+  }
+  .msg-source.voice { color: var(--purple); }
+  .msg-source.web { color: var(--cyan); }
+
+  .msg {
+    max-width: 70%; padding: 12px 16px; border-radius: var(--radius);
+    font-size: 14px; line-height: 1.7; word-wrap: break-word; white-space: pre-wrap; font-weight: 400;
+  }
+  .msg.user {
+    background: linear-gradient(135deg, rgba(0,180,255,0.2) 0%, rgba(10,132,255,0.15) 100%);
+    border: 1px solid rgba(0,180,255,0.25); color: #fff;
+    border-bottom-right-radius: 4px; backdrop-filter: blur(10px);
+  }
+  .msg.assistant {
+    background: var(--surface2); border: 1px solid var(--glass-border);
+    border-bottom-left-radius: 4px; backdrop-filter: blur(10px); position: relative;
+  }
+  .msg.assistant::before {
+    content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px;
+    background: linear-gradient(180deg, var(--cyan), transparent); border-radius: 1px;
+  }
+  .msg.system {
+    background: transparent; color: var(--text-muted);
+    font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 1px; padding: 4px 0;
+  }
+  .msg.tool-call {
+    background: rgba(0, 100, 200, 0.08); border: 1px solid rgba(0,180,255,0.15);
+    font-size: 12px; font-family: 'JetBrains Mono', monospace;
+    max-width: 85%; border-radius: var(--radius-sm); padding: 10px 14px; backdrop-filter: blur(10px);
+  }
+  .tool-name { color: var(--gold); font-weight: 600; }
+  .tool-result { color: var(--text-dim); margin-top: 6px; font-size: 11px; }
+
+  /* ─── Activity Bar ─── */
+  .activity-bar {
+    display: none; align-items: center; gap: 12px; padding: 10px 24px;
+    background: linear-gradient(90deg, rgba(255,159,26,0.05) 0%, transparent 100%);
+    border-top: 1px solid rgba(255,159,26,0.15); flex-shrink: 0; backdrop-filter: blur(10px);
+  }
+  .activity-bar.active { display: flex; }
+  .activity-spinner {
+    width: 18px; height: 18px; border: 2px solid rgba(255,159,26,0.2);
+    border-top-color: var(--gold); border-radius: 50%; animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .activity-text {
+    font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 1px;
+    color: var(--gold); text-transform: uppercase;
+  }
+  .activity-steps { display: flex; gap: 5px; margin-left: auto; }
+  .activity-step {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--glass-border); transition: all 0.3s;
+  }
+  .activity-step.done { background: var(--green); box-shadow: 0 0 6px var(--green-dim); }
+  .activity-step.active { background: var(--gold); box-shadow: 0 0 6px var(--gold-dim); animation: think-pulse 1s infinite; }
+
+  /* ─── Input Bar ─── */
+  .input-bar {
+    display: flex; align-items: center; gap: 10px; padding: 14px 24px;
+    border-top: 1px solid var(--glass-border);
+    background: linear-gradient(180deg, rgba(0,10,30,0.5) 0%, rgba(0,5,15,0.8) 100%);
+    backdrop-filter: blur(20px); position: relative;
+  }
+  .input-bar::before {
+    content: ''; position: absolute; top: -1px; left: 24px; right: 24px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--cyan-dim), transparent);
+  }
+  .input-wrapper { flex: 1; position: relative; }
+  .input-wrapper input {
+    width: 100%; background: rgba(0, 20, 50, 0.5); border: 1px solid var(--glass-border);
+    border-radius: var(--radius); padding: 12px 18px; color: var(--text);
+    font-size: 14px; font-family: 'Rajdhani', sans-serif; font-weight: 500;
+    letter-spacing: 0.3px; outline: none; transition: all 0.3s; backdrop-filter: blur(10px);
+  }
+  .input-wrapper input:focus {
+    border-color: var(--cyan);
+    box-shadow: 0 0 20px var(--cyan-dim), inset 0 0 20px rgba(0,180,255,0.03);
+  }
+  .input-wrapper input::placeholder { color: var(--text-muted); letter-spacing: 1px; }
+
+  /* Waveform */
+  .input-wave {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    display: flex; gap: 2px; align-items: center; height: 20px;
+    opacity: 0; transition: opacity 0.3s;
+  }
+  .input-wrapper input:focus ~ .input-wave { opacity: 1; }
+  .wave-bar { width: 2px; border-radius: 1px; background: var(--cyan); opacity: 0.4; }
+  .wave-bar:nth-child(1) { height: 8px; animation: wave 1.2s 0.0s ease-in-out infinite; }
+  .wave-bar:nth-child(2) { height: 14px; animation: wave 1.2s 0.1s ease-in-out infinite; }
+  .wave-bar:nth-child(3) { height: 6px; animation: wave 1.2s 0.2s ease-in-out infinite; }
+  .wave-bar:nth-child(4) { height: 18px; animation: wave 1.2s 0.3s ease-in-out infinite; }
+  .wave-bar:nth-child(5) { height: 10px; animation: wave 1.2s 0.4s ease-in-out infinite; }
+  .wave-bar:nth-child(6) { height: 4px; animation: wave 1.2s 0.5s ease-in-out infinite; }
+  @keyframes wave { 0%,100% { transform: scaleY(0.5); } 50% { transform: scaleY(1.5); } }
+
+  .btn {
+    padding: 11px 18px; border: none; border-radius: var(--radius);
+    font-size: 12px; font-weight: 600; font-family: 'Orbitron', monospace;
+    letter-spacing: 1px; text-transform: uppercase;
+    cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+  }
+  .btn-send {
+    background: linear-gradient(135deg, var(--cyan), var(--blue)); color: #fff;
+    box-shadow: 0 2px 15px var(--cyan-dim);
+  }
+  .btn-send:hover { filter: brightness(1.2); transform: translateY(-1px); box-shadow: 0 4px 25px var(--cyan-dim); }
+  .btn-send:disabled { opacity: 0.3; cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn-stop { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,71,87,0.3); }
+  .btn-stop:hover { background: rgba(255,71,87,0.25); box-shadow: 0 0 15px var(--red-dim); }
+
+  /* ─── Side Panel ─── */
+  .side-panel {
+    width: 320px; border-left: 1px solid var(--glass-border);
+    background: linear-gradient(180deg, rgba(0,10,30,0.8) 0%, rgba(0,5,15,0.9) 100%);
+    display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+    backdrop-filter: blur(20px); z-index: 5;
+  }
+  .side-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1px solid var(--glass-border);
+  }
+  .side-title {
+    font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px;
+    color: var(--text-dim); text-transform: uppercase;
+  }
+  .side-tabs { display: flex; border-bottom: 1px solid var(--glass-border); flex-shrink: 0; }
+  .side-tab {
+    flex: 1; padding: 10px; font-size: 10px; font-weight: 600;
+    font-family: 'Orbitron', monospace; text-transform: uppercase; letter-spacing: 1px;
+    text-align: center; color: var(--text-muted); cursor: pointer;
+    border: none; border-bottom: 2px solid transparent; transition: all 0.3s; background: none;
+  }
+  .side-tab:hover { color: var(--text-dim); }
+  .side-tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+  .side-content { flex: 1; overflow-y: auto; padding: 12px; }
+  .side-content::-webkit-scrollbar { width: 3px; }
+  .side-content::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .tool-log { display: flex; flex-direction: column; gap: 6px; }
+  .tool-log-entry {
+    padding: 10px 12px; background: var(--surface2); border-radius: var(--radius-sm);
+    border-left: 2px solid var(--cyan); font-size: 12px; font-family: 'JetBrains Mono', monospace;
+    animation: msg-in 0.2s ease-out; backdrop-filter: blur(5px);
+  }
+  .tool-log-entry .tl-name { color: var(--gold); font-weight: 500; }
+  .tool-log-entry .tl-result { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+
+  .live-feed { font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; }
+  .feed-entry { padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; animation: msg-in 0.15s ease-out; }
+  .feed-entry.feed-user { color: var(--cyan); }
+  .feed-entry.feed-user::before { content: "> "; font-weight: 600; color: var(--cyan); }
+  .feed-entry.feed-assistant { color: var(--green); }
+  .feed-entry.feed-assistant::before { content: "< "; font-weight: 600; color: var(--green); }
+  .feed-entry.feed-tool { color: var(--gold); font-size: 11px; opacity: 0.8; }
+  .feed-entry.feed-system { color: var(--text-muted); font-size: 11px; font-style: italic; }
+
+  .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .quick-btn {
+    padding: 12px 10px; background: var(--surface2); border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm); color: var(--text-dim);
+    font-size: 11px; font-family: 'Rajdhani', sans-serif; font-weight: 600;
+    letter-spacing: 0.3px; cursor: pointer; text-align: center;
+    transition: all 0.2s; backdrop-filter: blur(5px); position: relative; overflow: hidden;
+  }
+  .quick-btn::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, var(--cyan-dim) 0%, transparent 100%);
+    opacity: 0; transition: opacity 0.3s;
+  }
+  .quick-btn:hover {
+    border-color: var(--cyan); color: var(--text);
+    transform: translateY(-2px); box-shadow: 0 4px 15px var(--cyan-dim);
+  }
+  .quick-btn:hover::before { opacity: 1; }
+
+  .section-label {
+    font-family: 'Orbitron', monospace; font-size: 9px; text-transform: uppercase;
+    letter-spacing: 2px; color: var(--text-muted); margin: 16px 0 10px; padding-left: 2px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  .empty-hint {
+    color: var(--text-muted); font-family: 'Orbitron', monospace;
+    font-size: 9px; letter-spacing: 1px; text-align: center; padding: 30px 0;
+  }
+
+  /* ─── Settings Panel ─── */
+  .settings-group { margin-bottom: 18px; }
+  .settings-group-title {
+    font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 2px;
+    color: var(--cyan); text-transform: uppercase; margin-bottom: 10px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--glass-border);
+  }
+  .setting-row {
+    display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;
+  }
+  .setting-label {
+    font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 1px;
+    color: var(--text-dim); text-transform: uppercase;
+  }
+  .setting-input {
+    background: rgba(0, 20, 50, 0.5); border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm); padding: 8px 10px; color: var(--text);
+    font-size: 12px; font-family: 'JetBrains Mono', monospace; outline: none;
+    transition: border-color 0.3s; width: 100%;
+  }
+  .setting-input:focus { border-color: var(--cyan); }
+  .setting-input::placeholder { color: var(--text-muted); }
+  .setting-select {
+    background: rgba(0, 20, 50, 0.5); border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm); padding: 8px 10px; color: var(--text);
+    font-size: 12px; font-family: 'JetBrains Mono', monospace; outline: none;
+    width: 100%; appearance: none; cursor: pointer;
+  }
+  .setting-select option { background: #0a1628; }
+
+  .provider-card {
+    background: var(--surface2); border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 8px;
+    backdrop-filter: blur(5px); position: relative;
+    transition: border-color 0.3s;
+  }
+  .provider-card.active-provider { border-color: var(--cyan); }
+  .provider-card-header {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+  }
+  .provider-card-name {
+    font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 1px; color: var(--text);
+  }
+  .provider-card-actions { display: flex; gap: 6px; }
+  .provider-card-actions button {
+    background: none; border: none; color: var(--text-muted); cursor: pointer;
+    font-size: 12px; padding: 2px 4px; transition: color 0.2s;
+  }
+  .provider-card-actions button:hover { color: var(--text); }
+  .provider-card-actions .del-btn:hover { color: var(--red); }
+  .provider-card-detail {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .provider-card-badge {
+    font-family: 'Orbitron', monospace; font-size: 7px; letter-spacing: 1px;
+    color: var(--cyan); background: var(--cyan-dim); padding: 2px 6px;
+    border-radius: 4px; text-transform: uppercase;
+  }
+
+  .settings-btn {
+    width: 100%; padding: 9px; border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm); background: var(--surface2);
+    color: var(--text-dim); font-family: 'Orbitron', monospace;
+    font-size: 10px; letter-spacing: 1px; cursor: pointer;
+    transition: all 0.2s; text-transform: uppercase;
+  }
+  .settings-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+  .settings-btn.primary {
+    background: linear-gradient(135deg, var(--cyan-dim), var(--blue-dim));
+    border-color: var(--cyan); color: var(--cyan);
+  }
+  .settings-btn.primary:hover { filter: brightness(1.2); }
+  .settings-btn.danger:hover { border-color: var(--red); color: var(--red); }
+  .settings-save-toast {
+    display: none; text-align: center; padding: 8px;
+    font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 1px;
+    color: var(--green); animation: msg-in 0.3s ease-out;
+  }
+  .settings-save-toast.show { display: block; }
+
+  /* Provider modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
+    justify-content: center; align-items: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: linear-gradient(180deg, rgba(5,15,40,0.98) 0%, rgba(2,8,20,0.98) 100%);
+    border: 1px solid var(--glass-border); border-radius: var(--radius);
+    padding: 24px; width: 380px; max-width: 90vw;
+    animation: msg-in 0.3s ease-out;
+  }
+  .modal-title {
+    font-family: 'Orbitron', monospace; font-size: 12px; letter-spacing: 2px;
+    color: var(--cyan); text-transform: uppercase; margin-bottom: 18px;
+  }
+  .modal-btns { display: flex; gap: 8px; margin-top: 16px; }
+  .modal-btns .settings-btn { flex: 1; }
+
+  /* ─── Particles ─── */
+  .particles { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+  .particle {
+    position: absolute; width: 2px; height: 2px; background: var(--cyan);
+    border-radius: 50%; opacity: 0; animation: float-up linear infinite;
+  }
+  .particle:nth-child(1) { left: 10%; animation-duration: 15s; animation-delay: 0s; }
+  .particle:nth-child(2) { left: 25%; animation-duration: 20s; animation-delay: 3s; }
+  .particle:nth-child(3) { left: 40%; animation-duration: 18s; animation-delay: 6s; }
+  .particle:nth-child(4) { left: 55%; animation-duration: 22s; animation-delay: 2s; }
+  .particle:nth-child(5) { left: 70%; animation-duration: 16s; animation-delay: 8s; }
+  .particle:nth-child(6) { left: 85%; animation-duration: 25s; animation-delay: 4s; }
+  .particle:nth-child(7) { left: 15%; animation-duration: 19s; animation-delay: 10s; }
+  .particle:nth-child(8) { left: 60%; animation-duration: 21s; animation-delay: 1s; }
+  @keyframes float-up {
+    0% { bottom: -10px; opacity: 0; }
+    10% { opacity: 0.4; }
+    90% { opacity: 0.1; }
+    100% { bottom: 100vh; opacity: 0; transform: translateX(30px); }
+  }
+
+  /* ─── Responsive ─── */
+  @media (max-width: 900px) {
+    .side-panel { display: none; }
+    .msg { max-width: 90%; }
+    .header-right .model-select { min-width: 120px; }
+    .reactor-hero { padding: 20px 0 5px; }
+    .reactor { width: 80px; height: 80px; }
+  }
+  @media (max-width: 500px) {
+    .header { padding: 10px 14px; }
+    .logo { font-size: 16px; letter-spacing: 4px; }
+    .messages { padding: 10px 14px; }
+    .input-bar { padding: 10px 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="particles">
+  <div class="particle"></div><div class="particle"></div><div class="particle"></div>
+  <div class="particle"></div><div class="particle"></div><div class="particle"></div>
+  <div class="particle"></div><div class="particle"></div>
+</div>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo-wrapper">
+      <div class="logo-icon">
+        <svg viewBox="0 0 32 32">
+          <circle class="arc-ring" cx="16" cy="16" r="14" stroke-dasharray="6 4" />
+          <circle class="arc-ring-2" cx="16" cy="16" r="11" stroke-dasharray="3 5" />
+          <circle class="arc-core" cx="16" cy="16" r="4" />
+          <circle fill="none" cx="16" cy="16" r="6" stroke="rgba(0,212,255,0.3)" stroke-width="0.5" />
+        </svg>
+      </div>
+      <div>
+        <div class="logo">Jarvis</div>
+        <div class="logo-version">MK II</div>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">INITIALIZING</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <select class="model-select" id="modelSelect" title="Active AI provider">
+      <option value="">LOADING...</option>
+    </select>
+    <button class="hud-btn" id="muteBtn" title="Mute/Unmute (INSERT key)">
+      <span>&#128264;</span>
+      <div class="mute-slash"></div>
+    </button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="chat-panel">
+    <div class="reactor-hero">
+      <div class="reactor" id="reactor">
+        <svg viewBox="0 0 120 120">
+          <circle class="r-outer" cx="60" cy="60" r="56" stroke-dasharray="12 6" />
+          <circle class="r-mid" cx="60" cy="60" r="44" />
+          <circle class="r-inner" cx="60" cy="60" r="32" />
+          <circle class="r-core" cx="60" cy="60" r="14" />
+          <circle class="r-core-ring" cx="60" cy="60" r="18" />
+          <circle class="r-core-ring" cx="60" cy="60" r="22" />
+          <line x1="60" y1="2" x2="60" y2="12" stroke="rgba(0,212,255,0.2)" stroke-width="0.5" />
+          <line x1="60" y1="108" x2="60" y2="118" stroke="rgba(0,212,255,0.2)" stroke-width="0.5" />
+          <line x1="2" y1="60" x2="12" y2="60" stroke="rgba(0,212,255,0.2)" stroke-width="0.5" />
+          <line x1="108" y1="60" x2="118" y2="60" stroke="rgba(0,212,255,0.2)" stroke-width="0.5" />
+        </svg>
+        <div class="reactor-label" id="reactorLabel">STANDBY</div>
+      </div>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="activity-bar" id="activityBar">
+      <div class="activity-spinner"></div>
+      <span class="activity-text" id="activityText">PROCESSING</span>
+      <div class="activity-steps" id="activitySteps"></div>
+    </div>
+
+    <div class="input-bar">
+      <div class="input-wrapper">
+        <input type="text" id="input" placeholder="Command Jarvis..." autocomplete="off" />
+        <div class="input-wave">
+          <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+          <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+        </div>
+      </div>
+      <button class="btn btn-stop" id="stopBtn">ABORT</button>
+      <button class="btn btn-send" id="sendBtn">SEND</button>
+    </div>
+  </div>
+
+  <div class="side-panel">
+    <div class="side-header">
+      <span class="side-title">HUD Panels</span>
+    </div>
+    <div class="side-tabs">
+      <button class="side-tab active" data-tab="tools">Tools</button>
+      <button class="side-tab" data-tab="live">Live</button>
+      <button class="side-tab" data-tab="actions">Actions</button>
+      <button class="side-tab" data-tab="settings">Config</button>
+    </div>
+    <div class="side-content">
+      <div class="tab-panel active" id="tab-tools">
+        <div class="tool-log" id="toolLog"></div>
+        <div class="empty-hint" id="toolEmpty">AWAITING TOOL CALLS</div>
+      </div>
+      <div class="tab-panel" id="tab-live">
+        <div class="live-feed" id="liveFeed"></div>
+        <div class="empty-hint" id="liveEmpty">LIVE FEED STANDBY</div>
+      </div>
+      <div class="tab-panel" id="tab-actions">
+        <div class="section-label">Quick Commands</div>
+        <div class="quick-actions">
+          <button class="quick-btn" data-cmd="What's the weather?">Weather</button>
+          <button class="quick-btn" data-cmd="What time is it?">Time</button>
+          <button class="quick-btn" data-cmd="Take a screenshot">Screenshot</button>
+          <button class="quick-btn" data-cmd="What apps are open?">Open Apps</button>
+          <button class="quick-btn" data-cmd="Get system info">System Info</button>
+          <button class="quick-btn" data-cmd="Open Spotify">Spotify</button>
+          <button class="quick-btn" data-cmd="Search the web for latest tech news">Tech News</button>
+          <button class="quick-btn" data-cmd="Read my clipboard">Clipboard</button>
+        </div>
+        <div class="section-label">Utilities</div>
+        <div class="quick-actions">
+          <button class="quick-btn" data-cmd="Set volume to 50%">Volume 50%</button>
+          <button class="quick-btn" data-cmd="What's on my screen?">Screen Read</button>
+          <button class="quick-btn" data-cmd="Open file manager">Files</button>
+          <button class="quick-btn" data-cmd="Set a timer for 5 minutes">Timer 5m</button>
+        </div>
+      </div>
+      <div class="tab-panel" id="tab-settings">
+        <!-- Providers -->
+        <div class="settings-group">
+          <div class="settings-group-title">LLM Providers</div>
+          <div id="providersList"></div>
+          <button class="settings-btn" onclick="openProviderModal()">+ Add Provider</button>
+        </div>
+        <!-- LLM -->
+        <div class="settings-group">
+          <div class="settings-group-title">LLM Settings</div>
+          <div class="setting-row">
+            <label class="setting-label">Temperature</label>
+            <input class="setting-input" type="number" id="s-temperature" min="0" max="2" step="0.1" placeholder="0.7">
+          </div>
+        </div>
+        <!-- TTS -->
+        <div class="settings-group">
+          <div class="settings-group-title">Text-to-Speech</div>
+          <div class="setting-row">
+            <label class="setting-label">Voice</label>
+            <input class="setting-input" type="text" id="s-tts-voice" placeholder="af_heart">
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">Speed</label>
+            <input class="setting-input" type="number" id="s-tts-speed" min="0.5" max="3" step="0.1" placeholder="1.1">
+          </div>
+        </div>
+        <!-- STT -->
+        <div class="settings-group">
+          <div class="settings-group-title">Speech-to-Text</div>
+          <div class="setting-row">
+            <label class="setting-label">Model</label>
+            <select class="setting-select" id="s-stt-model">
+              <option value="tiny">tiny (fastest)</option>
+              <option value="base">base</option>
+              <option value="small" selected>small (default)</option>
+              <option value="medium">medium</option>
+              <option value="large-v3">large-v3 (best)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">Device</label>
+            <select class="setting-select" id="s-stt-device">
+              <option value="cpu">CPU</option>
+              <option value="cuda">GPU (CUDA)</option>
+            </select>
+          </div>
+        </div>
+        <!-- Wake Word -->
+        <div class="settings-group">
+          <div class="settings-group-title">Wake Word</div>
+          <div class="setting-row">
+            <label class="setting-label">Threshold</label>
+            <input class="setting-input" type="number" id="s-wake-threshold" min="0.1" max="0.9" step="0.05" placeholder="0.5">
+          </div>
+        </div>
+        <!-- Save -->
+        <button class="settings-btn primary" onclick="saveSettings()">Save Settings</button>
+        <div class="settings-save-toast" id="saveToast">SETTINGS SAVED</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Provider Modal -->
+<div class="modal-overlay" id="providerModal">
+  <div class="modal">
+    <div class="modal-title" id="modalTitle">Add Provider</div>
+    <input type="hidden" id="pm-editing-key" value="">
+    <div class="setting-row">
+      <label class="setting-label">Key (unique id)</label>
+      <input class="setting-input" type="text" id="pm-key" placeholder="my_provider">
+    </div>
+    <div class="setting-row">
+      <label class="setting-label">Label (display name)</label>
+      <input class="setting-input" type="text" id="pm-label" placeholder="My Cloud LLM">
+    </div>
+    <div class="setting-row">
+      <label class="setting-label">Type</label>
+      <select class="setting-select" id="pm-type">
+        <option value="openai">OpenAI-compatible</option>
+        <option value="ollama">Ollama</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <label class="setting-label">Model</label>
+      <input class="setting-input" type="text" id="pm-model" placeholder="gpt-4o / qwen3:8b / etc">
+    </div>
+    <div class="setting-row">
+      <label class="setting-label">Base URL</label>
+      <input class="setting-input" type="text" id="pm-url" placeholder="https://api.openai.com/v1">
+    </div>
+    <div class="setting-row">
+      <label class="setting-label">API Key (optional)</label>
+      <input class="setting-input" type="password" id="pm-apikey" placeholder="sk-...">
+    </div>
+    <div class="modal-btns">
+      <button class="settings-btn" onclick="closeProviderModal()">Cancel</button>
+      <button class="settings-btn primary" onclick="saveProvider()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const msgEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('sendBtn');
+const stopBtn = document.getElementById('stopBtn');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const toolLog = document.getElementById('toolLog');
+const toolEmpty = document.getElementById('toolEmpty');
+const liveFeed = document.getElementById('liveFeed');
+const liveEmpty = document.getElementById('liveEmpty');
+const modelSelect = document.getElementById('modelSelect');
+const muteBtn = document.getElementById('muteBtn');
+const activityBar = document.getElementById('activityBar');
+const activityText = document.getElementById('activityText');
+const activitySteps = document.getElementById('activitySteps');
+const reactor = document.getElementById('reactor');
+const reactorLabel = document.getElementById('reactorLabel');
+
+let ws = null;
+let thinking = false;
+let isMuted = false;
+let toolStepCount = 0;
+let pendingWebText = null;
+
+document.querySelectorAll('.side-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.side-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+  };
+});
+
+async function loadMuteState() {
+  try { const r = await fetch('/api/mute'); const d = await r.json(); isMuted = d.muted; updateMuteUI(); } catch(e) {}
+}
+function updateMuteUI() { muteBtn.classList.toggle('muted', isMuted); }
+muteBtn.onclick = async () => {
+  try { const r = await fetch('/api/mute', { method: 'POST' }); const d = await r.json(); isMuted = d.muted; updateMuteUI(); } catch(e) {}
+};
+
+async function loadProviders() {
+  try {
+    const resp = await fetch('/api/providers');
+    const data = await resp.json();
+    modelSelect.innerHTML = '';
+    for (const [key, prov] of Object.entries(data.providers)) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = prov.label;
+      if (key === data.active) opt.selected = true;
+      modelSelect.appendChild(opt);
+    }
+  } catch (e) {}
+}
+modelSelect.onchange = async () => {
+  try {
+    const resp = await fetch('/api/providers/' + modelSelect.value, { method: 'POST' });
+    const data = await resp.json();
+    if (data.status === 'ok') addMsg('system', 'PROVIDER: ' + modelSelect.options[modelSelect.selectedIndex].text);
+  } catch (e) {}
+};
+
+function setReactorState(state) {
+  reactor.className = 'reactor';
+  switch(state) {
+    case 'thinking': reactor.classList.add('thinking'); reactorLabel.textContent = 'PROCESSING'; break;
+    case 'listening': reactor.classList.add('listening'); reactorLabel.textContent = 'LISTENING'; break;
+    case 'speaking': reactor.classList.add('speaking'); reactorLabel.textContent = 'SPEAKING'; break;
+    case 'online': reactorLabel.textContent = 'ONLINE'; break;
+    default: reactorLabel.textContent = 'STANDBY';
+  }
+}
+
+function showActivity(text) { activityBar.classList.add('active'); activityText.textContent = text.toUpperCase(); }
+function hideActivity() { activityBar.classList.remove('active'); toolStepCount = 0; activitySteps.innerHTML = ''; }
+function addActivityStep() {
+  toolStepCount++;
+  activitySteps.innerHTML = '';
+  for (let i = 0; i < toolStepCount; i++) { const d = document.createElement('div'); d.className = 'activity-step done'; activitySteps.appendChild(d); }
+  const n = document.createElement('div'); n.className = 'activity-step active'; activitySteps.appendChild(n);
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { statusDot.className = 'status-dot online'; statusText.textContent = 'ONLINE'; setReactorState('online'); loadProviders(); loadMuteState(); };
+  ws.onclose = () => { statusDot.className = 'status-dot'; statusText.textContent = 'OFFLINE'; setReactorState('offline'); hideActivity(); setTimeout(connect, 3000); };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    console.log('[WS]', msg.type, msg.text || msg.message || '');
+    switch (msg.type) {
+      case 'connected': addMsg('system', msg.message.toUpperCase()); break;
+      case 'status':
+        if (msg.message === 'Thinking...') { setThinking(true); showActivity('ANALYZING'); setReactorState('thinking'); setStatusText('PROCESSING'); }
+        else if (msg.message === 'Listening...') { setThinking(false); hideActivity(); setReactorState('listening'); setStatusText('LISTENING'); }
+        else if (msg.message === 'Speaking...') { setThinking(false); hideActivity(); setReactorState('speaking'); setStatusText('SPEAKING'); }
+        else if (msg.message === 'Wake.') { setThinking(false); hideActivity(); setReactorState('listening'); setStatusText('LISTENING'); addMsg('system', '🎤 LISTENING...'); }
+        else if (msg.message === 'Stopped.') { setThinking(false); hideActivity(); setReactorState('online'); setStatusText('READY'); addMsg('system', '⏹ STOPPED'); }
+        else if (msg.message === 'Ready.') { setThinking(false); hideActivity(); setReactorState('online'); setStatusText('READY'); }
+        else { setThinking(false); hideActivity(); setReactorState('online'); setStatusText('READY'); }
+        break;
+      case 'user': {
+        const isOurs = pendingWebText && pendingWebText === msg.text;
+        if (!isOurs) addMsg('user', msg.text, 'voice');
+        pendingWebText = null;
+        addLiveFeed('user', msg.text);
+        break;
+      }
+      case 'tool': setStatusText('TOOL: ' + msg.name.toUpperCase()); showActivity('EXECUTING: ' + msg.name); addActivityStep(); addToolCall(msg.name, msg.args); addLiveFeed('tool', '[Tool: ' + msg.name + ']'); break;
+      case 'tool_result': updateToolResult(msg.name, msg.result); break;
+      case 'response': setThinking(false); hideActivity(); setReactorState('speaking'); setStatusText('SPEAKING'); addMsg('assistant', msg.text); addLiveFeed('assistant', msg.text); break;
+      case 'mute': isMuted = msg.muted; updateMuteUI(); addMsg('system', msg.muted ? '🔇 MUTED' : '🔊 UNMUTED'); break;
+      case 'provider_changed': loadProviders(); break;
+    }
+  };
+}
+
+function setThinking(on) {
+  thinking = on; sendBtn.disabled = on;
+  statusDot.className = on ? 'status-dot thinking' : 'status-dot online';
+}
+function setStatusText(text) {
+  statusText.textContent = text;
+}
+
+function addMsg(role, text, source) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'msg-wrapper ' + (role === 'user' ? 'right' : role === 'system' ? 'center' : 'left');
+  if (source && role !== 'system') {
+    const srcLabel = document.createElement('div');
+    srcLabel.className = 'msg-source ' + source;
+    srcLabel.textContent = source === 'voice' ? 'VOICE INPUT' : 'WEB INPUT';
+    wrapper.appendChild(srcLabel);
+  }
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = text;
+  wrapper.appendChild(div);
+  msgEl.appendChild(wrapper);
+  msgEl.scrollTop = msgEl.scrollHeight;
+}
+
+function addToolCall(name, args) {
+  toolEmpty.style.display = 'none';
+  const div = document.createElement('div'); div.className = 'msg-wrapper left';
+  const inner = document.createElement('div'); inner.className = 'msg tool-call';
+  const argStr = typeof args === 'object' ? JSON.stringify(args) : String(args);
+  inner.innerHTML = '<span class="tool-name">' + esc(name) + '</span>(' + esc(argStr.slice(0, 120)) + ')';
+  inner.id = 'tool-' + Date.now();
+  div.appendChild(inner); msgEl.appendChild(div); msgEl.scrollTop = msgEl.scrollHeight;
+  const entry = document.createElement('div'); entry.className = 'tool-log-entry';
+  entry.innerHTML = '<span class="tl-name">' + esc(name) + '</span>';
+  entry.id = 'tl-' + name + '-' + Date.now();
+  toolLog.prepend(entry);
+}
+
+function updateToolResult(name, result) {
+  const toolMsgs = msgEl.querySelectorAll('.msg.tool-call');
+  if (toolMsgs.length > 0) { const last = toolMsgs[toolMsgs.length - 1]; const res = document.createElement('div'); res.className = 'tool-result'; res.textContent = result.slice(0, 200); last.appendChild(res); }
+  const entries = toolLog.querySelectorAll('.tool-log-entry');
+  if (entries.length > 0) { const resDiv = document.createElement('div'); resDiv.className = 'tl-result'; resDiv.textContent = result.slice(0, 100); entries[0].appendChild(resDiv); }
+  showActivity('PROCESSING RESULTS');
+}
+
+function addLiveFeed(type, text) {
+  liveEmpty.style.display = 'none';
+  const div = document.createElement('div'); div.className = 'feed-entry feed-' + type;
+  div.textContent = text.length > 200 ? text.slice(0, 200) + '...' : text;
+  liveFeed.appendChild(div); liveFeed.scrollTop = liveFeed.scrollHeight;
+  while (liveFeed.children.length > 101) liveFeed.removeChild(liveFeed.children[1]);
+}
+
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+function send() {
+  const text = inputEl.value.trim();
+  if (!text || !ws) return;
+  pendingWebText = text;
+  addMsg('user', text, 'web');
+  ws.send(JSON.stringify({ type: 'chat', text }));
+  inputEl.value = '';
+}
+
+sendBtn.onclick = send;
+inputEl.onkeydown = (e) => { if (e.key === 'Enter') send(); };
+stopBtn.onclick = () => { if (ws) ws.send(JSON.stringify({ type: 'interrupt' })); hideActivity(); setReactorState('online'); };
+document.querySelectorAll('.quick-btn').forEach(btn => { btn.onclick = () => { inputEl.value = btn.dataset.cmd; send(); }; });
+
+// ─── Settings & Provider Management ───
+
+let _providersData = {};
+let _activeProvider = '';
+
+async function loadSettings() {
+  try {
+    const r = await fetch('/api/settings');
+    const d = await r.json();
+    document.getElementById('s-temperature').value = d.llm?.temperature ?? 0.7;
+    document.getElementById('s-tts-voice').value = d.tts?.voice ?? '';
+    document.getElementById('s-tts-speed').value = d.tts?.speed ?? '';
+    document.getElementById('s-stt-model').value = d.stt?.model ?? 'small';
+    document.getElementById('s-stt-device').value = d.stt?.device ?? 'cpu';
+    document.getElementById('s-wake-threshold').value = d.wake_word?.threshold ?? 0.5;
+  } catch(e) { console.error('loadSettings', e); }
+}
+
+async function saveSettings() {
+  const body = {
+    llm: { temperature: parseFloat(document.getElementById('s-temperature').value) || 0.7 },
+    tts: {
+      voice: document.getElementById('s-tts-voice').value,
+      speed: parseFloat(document.getElementById('s-tts-speed').value) || 1.1,
+    },
+    stt: {
+      model: document.getElementById('s-stt-model').value,
+      device: document.getElementById('s-stt-device').value,
+    },
+    wake_word: { threshold: parseFloat(document.getElementById('s-wake-threshold').value) || 0.5 },
+  };
+  try {
+    await fetch('/api/settings', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const toast = document.getElementById('saveToast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2000);
+  } catch(e) { console.error('saveSettings', e); }
+}
+
+async function loadProvidersFull() {
+  try {
+    const r = await fetch('/api/providers');
+    const d = await r.json();
+    _providersData = d.providers;
+    _activeProvider = d.active;
+    renderProviders();
+  } catch(e) {}
+}
+
+function renderProviders() {
+  const el = document.getElementById('providersList');
+  el.innerHTML = '';
+  for (const [key, p] of Object.entries(_providersData)) {
+    const isActive = key === _activeProvider;
+    const card = document.createElement('div');
+    card.className = 'provider-card' + (isActive ? ' active-provider' : '');
+    card.innerHTML =
+      '<div class="provider-card-header">' +
+        '<span class="provider-card-name">' + esc(p.label || key) + (isActive ? ' <span class="provider-card-badge">active</span>' : '') + '</span>' +
+        '<div class="provider-card-actions">' +
+          (isActive ? '' : '<button title="Activate" onclick="activateProvider(\'' + esc(key) + '\')">&#9654;</button>') +
+          '<button title="Edit" onclick="openProviderModal(\'' + esc(key) + '\')">&#9998;</button>' +
+          (isActive ? '' : '<button class="del-btn" title="Delete" onclick="deleteProvider(\'' + esc(key) + '\')">&#10006;</button>') +
+        '</div>' +
+      '</div>' +
+      '<div class="provider-card-detail">' + esc(p.type) + ' &middot; ' + esc(p.model || '—') + '</div>';
+    el.appendChild(card);
+  }
+}
+
+async function activateProvider(key) {
+  try {
+    const r = await fetch('/api/providers/' + key, { method: 'POST' });
+    const d = await r.json();
+    if (d.status === 'ok') {
+      _activeProvider = key;
+      renderProviders();
+      loadProviders();
+      addMsg('system', 'PROVIDER: ' + (_providersData[key]?.label || key));
+    }
+  } catch(e) {}
+}
+
+function openProviderModal(editKey) {
+  const modal = document.getElementById('providerModal');
+  const title = document.getElementById('modalTitle');
+  const keyInput = document.getElementById('pm-key');
+  const editHidden = document.getElementById('pm-editing-key');
+  if (editKey && _providersData[editKey]) {
+    const p = _providersData[editKey];
+    title.textContent = 'Edit Provider';
+    editHidden.value = editKey;
+    keyInput.value = editKey;
+    keyInput.disabled = true;
+    document.getElementById('pm-label').value = p.label || '';
+    document.getElementById('pm-type').value = p.type || 'openai';
+    document.getElementById('pm-model').value = p.model || '';
+    document.getElementById('pm-url').value = p.base_url || '';
+    document.getElementById('pm-apikey').value = '';
+  } else {
+    title.textContent = 'Add Provider';
+    editHidden.value = '';
+    keyInput.value = '';
+    keyInput.disabled = false;
+    document.getElementById('pm-label').value = '';
+    document.getElementById('pm-type').value = 'openai';
+    document.getElementById('pm-model').value = '';
+    document.getElementById('pm-url').value = '';
+    document.getElementById('pm-apikey').value = '';
+  }
+  modal.classList.add('show');
+}
+
+function closeProviderModal() {
+  document.getElementById('providerModal').classList.remove('show');
+}
+
+async function saveProvider() {
+  const editKey = document.getElementById('pm-editing-key').value;
+  const key = editKey || document.getElementById('pm-key').value.trim().replace(/\s+/g, '_');
+  if (!key) return;
+  const body = {
+    label: document.getElementById('pm-label').value || key,
+    type: document.getElementById('pm-type').value,
+    model: document.getElementById('pm-model').value,
+    base_url: document.getElementById('pm-url').value,
+  };
+  const apiKey = document.getElementById('pm-apikey').value;
+  if (apiKey) body.api_key = apiKey;
+  try {
+    await fetch('/api/providers/' + key, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    closeProviderModal();
+    await loadProvidersFull();
+    loadProviders();
+  } catch(e) { console.error('saveProvider', e); }
+}
+
+async function deleteProvider(key) {
+  if (!confirm('Delete provider "' + key + '"?')) return;
+  try {
+    const r = await fetch('/api/providers/' + key, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.status === 'ok') { await loadProvidersFull(); loadProviders(); }
+    else alert(d.message || 'Cannot delete');
+  } catch(e) {}
+}
+
+// Load settings when Config tab is opened
+document.querySelector('[data-tab="settings"]').addEventListener('click', () => {
+  loadSettings();
+  loadProvidersFull();
+});
+
+connect();
+</script>
+</body>
+</html>
