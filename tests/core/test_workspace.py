@@ -245,3 +245,39 @@ def test_workspace_views_and_sandboxed_preview_for_the_hud(rt):
     assert client.get("/workspace/m2/preview/index.html").status_code == 404  # other mission
     hud = client.get("/hud/").text
     assert 'id="codingPanel"' in hud and "previewFrame" in hud and 'sandbox="allow-scripts"' in hud
+    for tab in ("agents", "quality", "artifacts"):
+        assert f'data-tab="{tab}"' in hud  # agent rail, quality and artifact panels (SPEC §12.1)
+    js = client.get("/hud/hud.js").text
+    assert "/hud/vendor/monaco/vs/loader.js" in js  # Monaco only from the local vendor dir
+    assert "https://" not in js and "http://" not in js  # no third-party script at runtime
+
+
+def test_editor_save_goes_through_the_gate(rt):
+    from core.api import create_app
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app(rt))
+    assert (
+        client.put("/workspace/nope/file", json={"path": "a.py", "content": ""}).status_code == 404
+    )
+    m = run(rt.missions.create("edit"))
+    mid = m.mission_id
+    body = {"path": "app.py", "content": "print(1)\n", "device_id": "hud", "device_trusted": True}
+    r = client.put(f"/workspace/{mid}/file", json=body).json()
+    assert r["status"] == "completed" and r["verification"]["outcome"] == "achieved"
+    assert r["invocation"]["actor"] == "owner:hud"
+    assert client.get(f"/workspace/{mid}/file", params={"path": "app.py"}).json()["content"] == (
+        "print(1)\n"
+    )
+    r2 = client.put(f"/workspace/{mid}/file", json={**body, "content": "print(2)\n"}).json()
+    assert r2["status"] == "completed" and not r2["result"]["created"]
+    assert r2["result"]["diff_lines"] > 0  # the full diff travels in workspace.file.changed
+    changed = [
+        e for _, e in rt.bus.replay(correlation_id=mid) if e.type == "workspace.file.changed"
+    ]
+    assert len(changed) == 2 and changed[-1].payload["actor"] == "owner:hud"
+    assert client.put(f"/workspace/{mid}/file", json={**body, "path": "../x"}).status_code == 400
+    # nothing bypasses the gate: the kill switch blocks editor saves too
+    run(rt.gateway.halt("test"))
+    r3 = client.put(f"/workspace/{mid}/file", json=body).json()
+    assert r3["status"] == "halted"

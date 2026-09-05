@@ -67,17 +67,24 @@
     <h2>CODING
       <select id="codingMission" aria-label="Mission workspace"></select>
       <nav class="tabs" id="codingTabs">
-        <button data-tab="files" class="active">FILES</button><button data-tab="diff">DIFF</button>
+        <button data-tab="files" class="active">EDITOR</button><button data-tab="diff">DIFF</button>
         <button data-tab="terminal">TERMINAL</button><button data-tab="preview">PREVIEW</button>
+        <button data-tab="agents">AGENTS</button><button data-tab="quality">QUALITY</button>
+        <button data-tab="artifacts">ARTIFACTS</button>
       </nav>
+      <span id="editorInfo" class="info"></span>
+      <button id="saveBtn" class="primary" title="Write through the core (workspace.write, verified)" disabled>SAVE</button>
     </h2>
     <div class="coding-body">
       <div id="fileTree" class="list tree"></div>
       <div class="coding-main">
-        <pre id="codeView" class="code" data-tab="files"><code>Select a file…</code></pre>
+        <div id="codeView" class="code editor" data-tab="files" data-editor="textarea"><textarea id="codeArea" spellcheck="false" placeholder="Select a file…" aria-label="Editor"></textarea></div>
         <pre id="diffView" class="code" data-tab="diff" hidden><code>No diff yet.</code></pre>
         <pre id="terminalView" class="code term" data-tab="terminal" hidden><code></code></pre>
         <iframe id="previewFrame" data-tab="preview" hidden sandbox="allow-scripts" title="Preview" referrerpolicy="no-referrer"></iframe>
+        <div id="agentRail" class="list rows" data-tab="agents" hidden></div>
+        <div id="qualityView" class="list rows" data-tab="quality" hidden></div>
+        <div id="artifactView" class="list rows" data-tab="artifacts" hidden></div>
       </div>
     </div>
   </section>

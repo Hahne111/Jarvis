@@ -14,6 +14,7 @@ Endpoints
     GET  /debug                        minimal debug dashboard (static HTML)
     GET  /hud/                         web-first HUD shell (apps/desktop/web, ADR-0003)
     GET  /workspace/{mission}/files|file|diff|preview/{path}   read-only coding-mode views
+    PUT  /workspace/{mission}/file                             editor save via workspace.write
     GET  /memory?q&type&project        "What JARVIS Knows" (SPEC §8.4), /memory/{id}
     POST /memory/{id}/correct|forget|pin|unpin|temporary, /memory/forget_since, /memory/policy
 
@@ -35,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from core.api.commands import execute_call, run_text_command, safe_transition, settle_agent_run
+from core.capabilities import InvocationStatus
 from core.events.envelope import Event
 from core.memory import MemoryPolicyError, MemoryType
 from core.missions import MissionNotFound, MissionStatus
@@ -109,6 +111,14 @@ class PolicyIn(BaseModel):
 class DontLearnIn(BaseModel):
     subject: str = Field(min_length=1)
     predicate: str = "*"
+
+
+class WorkspaceWriteIn(BaseModel):
+    path: str = Field(min_length=1, max_length=512)
+    content: str = Field(max_length=2_000_000)
+    device_id: str | None = None
+    device_trusted: bool = False
+    user_id: str = "local-owner"
 
 
 def create_app(runtime: CoreRuntime) -> FastAPI:
@@ -345,6 +355,32 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         except WorkspaceError as exc:
             raise HTTPException(404 if "no such" in str(exc) else 400, str(exc)) from None
         return {"path": path, "content": content}
+
+    @app.put("/workspace/{mission_id}/file")
+    async def workspace_write(mission_id: str, body: WorkspaceWriteIn) -> dict[str, Any]:
+        """Editor save: goes through the gate like any other write (P2, verified, evented)."""
+        try:
+            runtime.missions.get(mission_id)
+        except MissionNotFound:
+            raise HTTPException(404, "mission not found") from None
+        res = await runtime.executor.run(
+            "workspace.write",
+            {"path": body.path, "content": body.content},
+            actor=f"owner:{body.device_id or 'api'}",
+            correlation_id=mission_id,
+            user_id=body.user_id,
+            device_id=body.device_id,
+            device_trusted=body.device_trusted,
+        )
+        inv, ver = res.invocation, res.verification
+        payload = {"path": body.path, "invocation": inv.to_dict(), "verification": ver.to_dict()}
+        if inv.status is InvocationStatus.AWAITING_APPROVAL:
+            return {**payload, "status": "waiting_for_approval", "decision_id": inv.decision_id}
+        if inv.status is InvocationStatus.FAILED and inv.error and "traversal" in inv.error:
+            raise HTTPException(400, inv.error)
+        if res.ok:
+            return {**payload, "status": "completed", "result": inv.result}
+        return {**payload, "status": inv.status.value, "error": inv.error or ver.reason}
 
     @app.get("/workspace/{mission_id}/diff")
     def workspace_diff(mission_id: str, path: str) -> dict[str, Any]:

@@ -84,28 +84,102 @@ function ingest(e) {
     dirty.latency = true;
   }
   if (e.type.startsWith("mission.") || e.type.startsWith("permission.") || e.type.startsWith("memory.")) queueRefresh();
-  if (e.type.startsWith("workspace.")) coding.onEvent(e);
+  if (CODING_TYPES.some((t) => e.type.startsWith(t))) coding.onEvent(e);
   scheduleRender();
 }
 
 // -------- coding mode (SPEC §12.1) --------------------------------------------------------------
+// Editor (Monaco from /hud/vendor, never a CDN; textarea fallback), diff, terminal, preview,
+// agent rail, quality and artifacts - all derived from persisted events of the selected mission.
+const CODING_TYPES = ["workspace.", "agent.", "artifact.", "verification.", "mission."];
+const CODING_LOG_MAX = 2000;
+const ERR = "\u0001"; // marks stderr chunks in the terminal buffer
+const editor = {
+  inst: null, monaco: null,
+  async boot() {
+    const loaded = await new Promise((res) => {
+      const sc = document.createElement("script"); sc.src = "/hud/vendor/monaco/vs/loader.js";
+      sc.onload = () => res(true); sc.onerror = () => res(false); document.head.appendChild(sc);
+    });
+    if (!loaded || !window.require) return this.info("textarea editor · run vendor/fetch_monaco.py for Monaco");
+    window.require.config({ paths: { vs: "/hud/vendor/monaco/vs" } });
+    await new Promise((res) => window.require(["vs/editor/editor.main"], () => res(true), () => res(false)));
+    if (!window.monaco) return this.info("textarea editor · Monaco failed to load");
+    this.monaco = window.monaco;
+    const host = document.createElement("div"); host.className = "monaco-host";
+    $("codeArea").hidden = true; $("codeView").appendChild(host); $("codeView").dataset.editor = "monaco";
+    this.inst = this.monaco.editor.create(host, { value: "", theme: "vs-dark", automaticLayout: true, fontSize: 12, minimap: { enabled: false }, scrollBeyondLastLine: false });
+    this.inst.onDidChangeModelContent(() => coding.markDirty());
+    this.info("monaco");
+  },
+  info(t) { $("editorInfo").textContent = t; },
+  set(mission, path, content) {
+    if (!this.inst) { $("codeArea").value = content; return; }
+    const uri = this.monaco.Uri.parse(`jarvis://${mission}/${path}`);
+    const old = this.monaco.editor.getModel(uri); if (old) old.dispose();
+    const prev = this.inst.getModel();
+    this.inst.setModel(this.monaco.editor.createModel(content, undefined, uri));
+    if (prev) prev.dispose();
+  },
+  get() { return this.inst ? this.inst.getValue() : $("codeArea").value; },
+};
 const coding = {
-  mission: null, file: null, tab: "files", term: [], dirty: false,
+  mission: null, file: null, tab: "files", term: [], dirty: false, editing: false, log: new Map(),
   onEvent(e) {
-    if (e.type === "workspace.file.changed" && (!this.mission || e.correlation_id === this.mission)) {
-      this.mission ||= e.correlation_id;
+    const cid = e.correlation_id;
+    const arr = this.log.get(cid) || []; arr.push(e); if (arr.length > CODING_LOG_MAX) arr.shift(); this.log.set(cid, arr);
+    if (e.type === "workspace.file.changed" && (!this.mission || cid === this.mission)) {
+      this.mission ||= cid;
       this.dirty = true; queueCoding();
-      if (e.payload.path === this.file) this.loadFile(this.file);
+      if (e.payload.path === this.file) { if (this.editing) editor.info(`${this.file} changed on disk by ${e.payload.actor}`); else this.loadFile(this.file, String(e.payload.actor).startsWith("owner:")); }
       $("diffView").querySelector("code").innerHTML = colorDiff(e.payload.diff || "");
     }
-    if (e.type === "workspace.run.started" && e.correlation_id === this.mission) { this.term = [`$ ${e.payload.command} ${(e.payload.args || []).join(" ")}\n`]; this.renderTerm(); }
-    if (e.type === "workspace.run.output" && e.correlation_id === this.mission) { this.term.push(e.payload.stream === "stderr" ? `\u0001${e.payload.chunk}` : e.payload.chunk); this.renderTerm(); }
-    if (e.type === "workspace.run.finished" && e.correlation_id === this.mission) { this.term.push(`\n[exit ${e.payload.exit_code}${e.payload.timed_out ? " · timeout" : ""} · ${e.payload.duration_ms} ms]\n`); this.renderTerm(); }
+    if (cid !== this.mission) return;
+    if (e.type === "workspace.run.started") { this.term = [`$ ${e.payload.command} ${(e.payload.args || []).join(" ")}\n`]; this.renderTerm(); }
+    if (e.type === "workspace.run.output") { this.term.push(e.payload.stream === "stderr" ? ERR + e.payload.chunk : e.payload.chunk); this.renderTerm(); }
+    if (e.type === "workspace.run.finished") { this.term.push(`\n[exit ${e.payload.exit_code}${e.payload.timed_out ? " · timeout" : ""} · ${e.payload.duration_ms} ms]\n`); this.renderTerm(); }
+    if (e.type.startsWith("agent.") || e.type.startsWith("mission.") || e.type.startsWith("verification.") || e.type === "workspace.run.finished" || e.type === "artifact.created") queueCoding();
   },
   renderTerm() {
     const code = $("terminalView").querySelector("code");
-    code.innerHTML = this.term.map((c) => c.startsWith("\u0001") ? `<span class="err">${esc(c.slice(1))}</span>` : esc(c)).join("");
+    code.innerHTML = this.term.map((c) => c.startsWith(ERR) ? `<span class="err">${esc(c.slice(1))}</span>` : esc(c)).join("");
     $("terminalView").scrollTop = $("terminalView").scrollHeight;
+  },
+  events() { return this.log.get(this.mission) || []; },
+  renderAgents() {
+    const runs = new Map(); const timeline = [];
+    for (const e of this.events()) {
+      const p = e.payload || {};
+      if (e.type === "agent.run.started" || e.type === "agent.subrun.started") runs.set(p.run.run_id, { ...p.run, status: "running", tools: [], rejected: 0 });
+      const r = runs.get(p.run ? p.run.run_id : p.run_id);
+      if (!r) { if (e.type.startsWith("mission.")) timeline.push(`${fmtTime(e.timestamp)} ${e.type.slice(8)} ${p.reason || ""}`); continue; }
+      if (e.type === "agent.tool.proposed") r.tools.push(p.call.name);
+      if (e.type === "agent.tool.rejected") r.rejected++;
+      if (e.type === "agent.run.paused") r.status = "awaiting approval";
+      if (e.type === "agent.run.resumed") r.status = "running";
+      if (e.type === "agent.run.budget_exceeded") r.status = `budget ${p.dimension}`;
+      if (e.type === "agent.run.finished" || e.type === "agent.subrun.finished") Object.assign(r, p.run, { status: p.run.outcome });
+    }
+    const cls = (st) => st === "completed" ? "ok" : st === "running" ? "" : st === "awaiting approval" ? "wait" : "bad";
+    const rows = [...runs.values()].map((r) => `<div class="row ${r.depth ? "sub" : ""}"><span class="role">${r.depth ? "↳ " : ""}${esc(r.role || "coordinator")}</span><span class="${cls(r.status)}">${esc(r.status || "")}</span><span class="muted">${r.steps} steps · ${r.tools.length} tools${r.rejected ? ` · ${r.rejected} rejected` : ""} · $${r.cost_usd}</span>${r.error ? `<span class="bad">${esc(r.error).slice(0, 80)}</span>` : ""}</div>`);
+    $("agentRail").innerHTML = (rows.length ? rows.join("") : `<div class="empty">No agent runs for this mission.</div>`) + (timeline.length ? `<div class="muted" style="margin-top:8px">TIMELINE</div>` + timeline.map((t) => `<div class="row muted">${esc(t)}</div>`).join("") : "");
+  },
+  renderQuality() {
+    const runs = []; let last = null; let verdict = "";
+    for (const e of this.events()) {
+      const p = e.payload || {};
+      if (e.type === "workspace.run.started") last = { cmd: `${p.command} ${(p.args || []).join(" ")}`, exit: null, ms: null, verified: "…" };
+      if (e.type === "workspace.run.finished" && last) { Object.assign(last, { exit: p.exit_code, ms: p.duration_ms, timed_out: p.timed_out }); runs.push(last); }
+      if (e.type.startsWith("verification.") && e.type !== "verification.skipped" && p.verification && p.verification.capability === "workspace.run" && runs.length) runs[runs.length - 1].verified = p.verification.outcome;
+      if (e.type === "agent.run.finished") verdict = `${p.run.outcome}${p.run.error ? ` · ${p.run.error}` : ""}`;
+    }
+    const green = runs.length && runs[runs.length - 1].exit === 0 && runs[runs.length - 1].verified === "achieved";
+    $("qualityView").innerHTML = `<div class="row"><b class="${green ? "ok" : "bad"}">${green ? "✓ last run green" : runs.length ? "✗ last run red" : "no run yet"}</b><span class="muted">${runs.length} runs · mission ${esc(verdict || "in progress")}</span></div>` +
+      runs.map((r) => `<div class="row"><span class="${r.exit === 0 ? "ok" : "bad"}">${r.exit === 0 ? "✓" : "✗"}</span><span>${esc(r.cmd)}</span><span class="muted">exit ${r.exit}${r.timed_out ? " · timeout" : ""} · ${r.ms} ms · verifier ${r.verified}</span></div>`).join("");
+  },
+  renderArtifacts() {
+    const arts = this.events().filter((e) => e.type === "artifact.created").map((e) => e.payload);
+    $("artifactView").innerHTML = arts.length ? arts.map((a) => `<div class="row"><span>${esc(a.path)}</span><span class="muted">${a.size} B · ${short(a.sha256)}</span><button data-open="${esc(a.path)}">open</button>${/\.(html?|svg|png|jpe?g|gif)$/i.test(a.path) ? `<button data-preview="${esc(a.path)}">preview</button>` : ""}</div>`).join("") : `<div class="empty">No artifacts yet - they appear when a coding mission completes.</div>`;
   },
   async refresh() {
     const missions = await api("/missions");
@@ -117,15 +191,25 @@ const coding = {
     const { files } = await api(`/workspace/${current}/files`).catch(() => ({ files: [] }));
     $("fileTree").innerHTML = files.length ? files.map((f) => `<div class="${f.dir ? "dir" : "file"} ${f.path === this.file ? "active" : ""}" data-path="${f.path}" data-dir="${f.dir}">${f.dir ? "▸ " : ""}${esc(f.path)}</div>`).join("") : `<div class="empty">Empty workspace.</div>`;
     const html = files.find((f) => !f.dir && f.path.endsWith("index.html"));
-    $("previewFrame").src = html ? `/workspace/${current}/preview/${html.path}` : "about:blank";
+    if (!$("previewFrame").dataset.pinned) $("previewFrame").src = html ? `/workspace/${current}/preview/${html.path}` : "about:blank";
+    this.renderAgents(); this.renderQuality(); this.renderArtifacts();
   },
-  async loadFile(path) {
+  async loadFile(path, keepInfo = false) {
     this.file = path;
     const { content } = await api(`/workspace/${this.mission}/file?path=${encodeURIComponent(path)}`);
-    $("codeView").querySelector("code").textContent = content;
+    editor.set(this.mission, path, content); this.editing = false; $("saveBtn").disabled = true; if (!keepInfo) editor.info(path);
     const { diff } = await api(`/workspace/${this.mission}/diff?path=${encodeURIComponent(path)}`);
     $("diffView").querySelector("code").innerHTML = diff ? colorDiff(diff) : "No changes since the last version.";
     for (const el of $("fileTree").children) el.classList.toggle("active", el.dataset.path === path);
+  },
+  markDirty() { if (this.file) { this.editing = true; $("saveBtn").disabled = false; editor.info(`${this.file} · unsaved`); } },
+  async save() {
+    if (!this.file || !this.mission) return;
+    const body = { path: this.file, content: editor.get(), device_id: "hud", device_trusted: $("trusted").checked };
+    const r = await api(`/workspace/${this.mission}/file`, { method: "PUT", body: JSON.stringify(body) }).catch((err) => ({ status: "error", error: String(err) }));
+    if (r.status === "completed") { this.editing = false; $("saveBtn").disabled = true; editor.info(`${this.file} · saved · verified ${r.verification.outcome}`); }
+    else if (r.status === "waiting_for_approval") editor.info(`${this.file} · waiting for approval`);
+    else editor.info(`${this.file} · ${r.status}: ${r.error || ""}`);
   },
   showTab(tab) {
     this.tab = tab;
@@ -133,13 +217,20 @@ const coding = {
     for (const b of $("codingTabs").children) b.classList.toggle("active", b.dataset.tab === tab);
   },
 };
-const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const colorDiff = (d) => esc(d).split("\n").map((l) => l.startsWith("+") && !l.startsWith("+++") ? `<span class="add">${l}</span>` : l.startsWith("-") && !l.startsWith("---") ? `<span class="del">${l}</span>` : l.startsWith("@@") ? `<span class="hunk">${l}</span>` : l).join("\n");
 let codingTimer = null;
 function queueCoding() { if (!codingTimer) codingTimer = setTimeout(() => { codingTimer = null; coding.refresh(); }, 200); }
 $("codingTabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) coding.showTab(b.dataset.tab); });
-$("codingMission").addEventListener("change", (e) => { coding.mission = e.target.value; coding.file = null; coding.refresh(); });
+$("codingMission").addEventListener("change", (e) => { coding.mission = e.target.value; coding.file = null; delete $("previewFrame").dataset.pinned; coding.refresh(); });
 $("fileTree").addEventListener("click", (e) => { const d = e.target.closest("div[data-path]"); if (d && d.dataset.dir !== "true") { coding.loadFile(d.dataset.path); coding.showTab("files"); } });
+$("codeArea").addEventListener("input", () => coding.markDirty());
+$("saveBtn").addEventListener("click", () => coding.save());
+$("artifactView").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.open) { coding.loadFile(b.dataset.open); coding.showTab("files"); }
+  if (b.dataset.preview) { $("previewFrame").dataset.pinned = "1"; $("previewFrame").src = `/workspace/${coding.mission}/preview/${b.dataset.preview}`; coding.showTab("preview"); }
+});
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws/events?after_seq=${state.lastSeq}`);
   ws.onopen = () => { $("status").textContent = "live"; };
@@ -198,4 +289,4 @@ $("railFilter").addEventListener("change", (e) => { state.filter = e.target.valu
 $("memQuery").addEventListener("input", queueRefresh);
 
 // -------- boot ------------------------------------------------------------------------------
-connect(); refreshHealth(); refreshLists(); coding.refresh(); setInterval(refreshHealth, 5000);
+connect(); refreshHealth(); refreshLists(); coding.refresh(); editor.boot(); setInterval(refreshHealth, 5000);

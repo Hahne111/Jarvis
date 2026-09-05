@@ -52,5 +52,9 @@ body[data-state=halted] .ring{animation-play-state:paused;border-color:#5a2a2a}
 .coding-main{min-height:0;display:flex} .code{margin:0;flex:1;overflow:auto;background:#070b10;border:1px solid var(--line);border-radius:4px;padding:10px;font:12px/1.45 var(--mono);white-space:pre}
 .code.term .err{color:var(--red)} .code .add{color:var(--green)} .code .del{color:var(--red)} .code .hunk{color:var(--cyan)}
 #previewFrame{flex:1;border:1px solid var(--line);border-radius:4px;background:#fff}
+.code.editor{padding:0;display:flex} .code.editor textarea{flex:1;background:transparent;color:var(--text);border:0;outline:0;resize:none;padding:10px;font:12px/1.45 var(--mono);white-space:pre;tab-size:4}
+.code.editor .monaco-host{flex:1;min-height:0} .panel h2 .info{color:var(--muted);font:11px var(--mono);letter-spacing:0} .panel h2 #saveBtn{padding:3px 8px;font-size:11px}
+.rows{flex:1;border:1px solid var(--line);border-radius:4px;padding:6px 10px;background:#070b10} .rows .row{display:flex;gap:10px;padding:3px 0;border-bottom:1px dotted #142230;align-items:center}
+.rows .ok{color:var(--green)} .rows .bad{color:var(--red)} .rows .wait{color:var(--amber)} .rows .role{color:var(--cyan);min-width:110px} .rows .sub{padding-left:18px} .rows .muted{color:var(--muted)} .rows button{padding:1px 6px;font-size:10px}
 @media (prefers-reduced-motion:reduce){.ring,.nucleus{animation:none!important}}
 @media (max-width:1100px){.grid{grid-template-columns:1fr 1fr;grid-template-rows:auto}.core-panel{grid-row:auto;grid-column:1/3}}

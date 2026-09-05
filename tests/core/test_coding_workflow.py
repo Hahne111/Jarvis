@@ -194,6 +194,70 @@ def test_red_run_keeps_the_mission_open_and_prose_files_need_no_run(tmp_path):
     assert r.ok and "artifact.created" in types(prose, m.mission_id)
 
 
+def test_phase7_exit_error_is_visible_and_repaired(tmp_path):
+    """Blueprint Phase 7 exit: prototype built, run, error visible in the HUD events, repaired."""
+    bad_calc = "def add(a, b):\n    return a - b\n"
+    pytest_run = call(
+        "workspace.run", {"command": "python", "args": ["-m", "pytest", "-q", "test_calc.py"]}, "r"
+    )
+    seen_failure = {}
+
+    def script(messages):
+        n = seen_failure.setdefault("step", 0)
+        seen_failure["step"] = n + 1
+        if n == 0:
+            return ProviderResult(
+                "",
+                tool_calls=(
+                    call("workspace.write", {"path": "calc.py", "content": bad_calc}, "w1"),
+                    call("workspace.write", {"path": "test_calc.py", "content": TEST_OK}, "w2"),
+                ),
+                stop_reason="tool_use",
+            )
+        if n == 1:
+            return ProviderResult("", tool_calls=(pytest_run,), stop_reason="tool_use")
+        if n == 2:  # the model sees the red run in the tool result and repairs the code
+            last = messages[-1].content
+            assert '"verified": "not_achieved"' in last and "assert" in last
+            return ProviderResult(
+                "",
+                tool_calls=(call("workspace.write", {"path": "calc.py", "content": CALC}, "w3"),),
+                stop_reason="tool_use",
+            )
+        if n == 3:
+            return ProviderResult("", tool_calls=(pytest_run,), stop_reason="tool_use")
+        return ProviderResult("Fixed the subtraction bug; tests are green.")
+
+    rt = build(tmp_path, script)
+    client = TestClient(create_app(rt))
+    out = client.post("/commands", json={"text": "build calc", "device_trusted": True}).json()
+    mid = out["mission_id"]
+    res = client.post(f"/approvals/{out['decision_id']}/approve", json=PROOF).json()
+    assert res["status"] == "waiting_for_approval"  # red run -> repair -> second run needs P3
+    res = client.post(f"/approvals/{res['decision_id']}/approve", json=PROOF).json()
+    assert res["status"] == "completed" and "green" in res["result"]
+    evs = [e for _, e in rt.bus.replay(correlation_id=mid)]
+    finished = [e.payload for e in evs if e.type == "workspace.run.finished"]
+    assert [f["exit_code"] for f in finished] == [1, 0]
+    ver = [
+        e.type
+        for e in evs
+        if e.payload.get("verification", {}).get("capability") == "workspace.run"
+        and e.type != "verification.skipped"  # the awaiting-approval attempt verifies nothing
+    ]
+    assert ver == ["verification.failed", "verification.passed"]
+    assert any(
+        e.type == "workspace.run.output" and "assert" in e.payload["chunk"] for e in evs
+    )  # the failing test output is visible in the terminal panel
+    changed = [e.payload["path"] for e in evs if e.type == "workspace.file.changed"]
+    assert changed == ["calc.py", "test_calc.py", "calc.py"]
+    assert sorted(e.payload["path"] for e in evs if e.type == "artifact.created") == [
+        "calc.py",
+        "test_calc.py",
+    ]
+    assert client.get(f"/missions/{mid}").json()["status"] == "completed"
+
+
 def test_test_role_cannot_run_arbitrary_commands(tmp_path):
     table = {
         "check": [

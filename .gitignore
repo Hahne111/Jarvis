@@ -10,3 +10,6 @@ dist/
 
 *.log
 *.wav
+
+# HUD vendor bundles (fetched by apps/desktop/web/vendor/fetch_monaco.py)
+apps/desktop/web/vendor/monaco/

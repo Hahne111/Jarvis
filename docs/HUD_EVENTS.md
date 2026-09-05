@@ -27,6 +27,11 @@ Das HUD (Tauri/React, später Mobile) rendert **ausschließlich persistierte Eve
 | Kill Switch | `gateway.halted` (critical), `gateway.resumed`; Aktionen `POST /kill`, `POST /resume` | Resume nur mit starkem Proof |
 | Memory-Panel „What JARVIS Knows“ | `memory.written|reinforced|updated|corrected|conflict|forgotten|forgotten_window|pinned|unpinned|made_temporary|expired|context_used|policy_changed`, Daten via `GET /memory` | Events enthalten nie den Wert |
 | Performance-Overlay | `telemetry.latency` (`point`, `ms`, `budget_ms`, `within_budget`) | p50/p95 lokal berechnen oder `voice.telemetry.summary_from_log` |
+| Coding: Tree/Editor/Diff | `workspace.file.changed` (`path`, `diff`, `sha256`, `actor`), Daten via `GET /workspace/{mission}/files|file|diff`; Speichern `PUT /workspace/{mission}/file` (läuft als `workspace.write` durch das Gateway, `actor=owner:<device>`) | Editor: Monaco nur aus `/hud/vendor` (lokal, `fetch_monaco.py`), sonst Textarea |
+| Coding: Terminal | `workspace.run.started` (`command`, `args`), `workspace.run.output` (`stream`, `chunk`), `workspace.run.finished` (`exit_code`, `timed_out`, `duration_ms`) | stderr hervorheben; Exit-Zeile am Ende |
+| Coding: Quality | `workspace.run.finished` + `verification.passed|failed` (`capability=workspace.run`), `agent.run.finished` (`outcome`, z. B. `not_verified`) | „grün“ = letzter Run Exit 0 **und** `verification.passed` |
+| Coding: Artifacts | `artifact.created` (`path`, `size`, `sha256`, `run_id`) beim Abschluss einer Coding-Mission | Öffnen über `/file`, Vorschau über `/preview/<path>` |
+| Coding: Preview | `GET /workspace/{mission}/preview/<path>` im `<iframe sandbox="allow-scripts">` | nur Dateien des Missions-Workspaces, CSP-Sandbox, kein Cache |
 
 ## Presence-Zustände (`presence.changed`)
 `idle | listening | thinking | speaking | working | awaiting_approval | halted` pro `device_id`
