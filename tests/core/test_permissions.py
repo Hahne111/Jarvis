@@ -108,7 +108,10 @@ def test_policy_overrides_may_only_tighten():
 
 
 def test_policy_accepts_plain_strings_from_config():
-    engine, _, _ = make(Policy(overrides={"1": "ask"}, forbidden_actions=["x.forbidden"]))  # type: ignore[arg-type]
+    engine, _, _ = make(
+        Policy(overrides={"P1": "ask", "2": "ask"}, forbidden_actions=["x.forbidden"])  # type: ignore[arg-type]
+    )
+    assert engine.policy.overrides == {RiskLevel.P1: Decision.ASK, RiskLevel.P2: Decision.ASK}
     d = run(engine.evaluate(req(RiskLevel.P1)))
     assert d.decision is Decision.ASK and d.required_strength is ApprovalStrength.UI_CONFIRM
     assert d.expires_at is not None

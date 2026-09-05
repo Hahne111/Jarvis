@@ -36,6 +36,16 @@ DEFAULT_ASK_TTL_S: dict[ApprovalStrength, int] = {
 DEFAULT_GRANT_TTL_S = 60  # temporary capability: rights expire (SECURITY.md §2 rule 3)
 
 
+def _risk(value: object) -> RiskLevel:
+    """Accept RiskLevel, ints or strings like "P3"/"3" (config files)."""
+    if isinstance(value, RiskLevel):
+        return value
+    if isinstance(value, str):
+        text = value.strip().upper()
+        return RiskLevel[text] if text.startswith("P") else RiskLevel(int(text))
+    return RiskLevel(int(value))  # type: ignore[call-overload]
+
+
 @dataclass(frozen=True)
 class Verdict:
     decision: Decision
@@ -56,7 +66,7 @@ class Policy:
 
     def __post_init__(self) -> None:
         # Normalise so plain strings/ints from config behave exactly like the enums.
-        normalised = {RiskLevel(r): Decision(d) for r, d in self.overrides.items()}
+        normalised = {_risk(r): Decision(d) for r, d in self.overrides.items()}
         object.__setattr__(self, "overrides", normalised)
         object.__setattr__(self, "forbidden_actions", frozenset(self.forbidden_actions))
         object.__setattr__(self, "ask_actions", frozenset(self.ask_actions))
@@ -80,10 +90,10 @@ class Policy:
         """Return a policy that is at least as strict as ``self`` in every dimension."""
         new_overrides: dict = changes.get("overrides", {})  # type: ignore[assignment]
         for risk, decision in new_overrides.items():
-            current = self.overrides.get(RiskLevel(risk), DEFAULT_RULES[RiskLevel(risk)][0])
+            current = self.overrides.get(_risk(risk), DEFAULT_RULES[_risk(risk)][0])
             if STRICTNESS[Decision(decision)] < STRICTNESS[current]:
                 raise PolicyViolation(
-                    f"override for {RiskLevel(risk).name} would loosen policy "
+                    f"override for {_risk(risk).name} would loosen policy "
                     f"({current.value} -> {Decision(decision).value})"
                 )
         if int(changes.get("grant_ttl_s", self.grant_ttl_s)) > self.grant_ttl_s:  # type: ignore[call-overload]
