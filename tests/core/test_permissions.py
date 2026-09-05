@@ -235,7 +235,7 @@ def test_pending_and_grants_are_rebuilt_from_the_event_log(tmp_path):
     pending = run(engine.evaluate(req(RiskLevel.P4, "deploy.prod", correlation_id="m3")))
     granted = run(engine.evaluate(req(RiskLevel.P3, "mail.send", correlation_id="m3")))
     run(engine.approve(granted.decision_id, CONFIRM))
-    denied = run(engine.evaluate(req(RiskLevel.P6, "secrets.dump", correlation_id="m3")))
+    denied = run(engine.evaluate(req(RiskLevel.P6, "vault.export", correlation_id="m3")))
 
     restarted, _, clock2 = make(url=url)
     clock2.now = clock.now

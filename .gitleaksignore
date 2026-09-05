@@ -1,0 +1,4 @@
+# gitleaks false positives (fingerprint = commit:file:rule:line). Each entry must name why.
+# Test action name "secrets.dump" next to correlation_id="m3" matched generic-api-key; it is a
+# string literal in a unit test, not a credential. Renamed to "vault.export" in a later commit.
+42a59f9d35b67c6f0977ec57416ceaa2c70bdd63:tests/core/test_permissions.py:generic-api-key:238
