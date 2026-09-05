@@ -1,9 +1,10 @@
 from __future__ import annotations
 import json
+import os
 import re
+import sys
 import time
 import threading
-import msvcrt
 from datetime import datetime
 from pathlib import Path
 import yaml
@@ -21,6 +22,13 @@ from jarvis.tools.router import TOOL_SCHEMAS, dispatch
 
 _MAX_TOOL_LOOPS = 15
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+_IS_WINDOWS = sys.platform == "win32"
+_IS_MAC = sys.platform == "darwin"
+_KEY_HINT = (
+    "Esc = stop | F2 = type | INSERT = mute/unmute" if _IS_WINDOWS
+    else "Esc = stop | F2 or t = type | F3 or m = mute/unmute"
+)
+_HOTKEY_EXAMPLES = "cmd+t, cmd+q, cmd+tab" if _IS_MAC else "ctrl+t, alt+f4"
 
 # Global abort — Esc sets this, stops everything (speech + tool loop + follow-up)
 _abort = threading.Event()
@@ -131,7 +139,7 @@ def _system_prompt() -> str:
         "- After clicking, always verify the result before proceeding\n"
         "- If text not found, try scroll_screen then find_on_screen again\n"
         "- For typing in fields: click_at the field first, then type_text\n"
-        "- Use press_key for keyboard shortcuts (ctrl+t, alt+f4, etc)\n"
+        f"- Use press_key for keyboard shortcuts ({_HOTKEY_EXAMPLES}, etc)\n"
         "- If a tool fails, try once more before giving up\n\n"
         "Answer in 1-3 sentences unless more is clearly needed. "
         f"Current date and time: {now}."
@@ -383,7 +391,72 @@ def _process_request(user_text: str) -> str:
 
 
 def _keyboard_listener() -> None:
-    """Background thread: Esc = abort, F2 = type command, INSERT = mute/unmute."""
+    """Background thread: Esc = abort, F2 = type command, INSERT (Win) / F3 (Mac) = mute/unmute."""
+    if _IS_WINDOWS:
+        _keyboard_listener_windows()
+    else:
+        _keyboard_listener_posix()
+
+
+# Terminal escape sequences for function keys (xterm SS3 and CSI forms)
+_ESC_SEQUENCES = {"OQ": "F2", "[12~": "F2", "OR": "F3", "[13~": "F3"}
+
+
+def _keyboard_listener_posix() -> None:
+    """macOS/Linux: Esc = abort, F2 or 't' = type command, F3 or 'm' = mute/unmute.
+    (INSERT does not exist on Mac keyboards.) Does nothing if stdin is not a terminal."""
+    import atexit
+    import select
+    import termios
+    import tty
+
+    if not sys.stdin.isatty():
+        return
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    atexit.register(termios.tcsetattr, fd, termios.TCSADRAIN, saved)  # daemon thread: restore on exit
+
+    def _read_key() -> str:
+        ch = os.read(fd, 1).decode(errors="ignore")
+        if ch != "\x1b":
+            return ch
+        seq = ""
+        while select.select([fd], [], [], 0.05)[0]:
+            seq += os.read(fd, 1).decode(errors="ignore")
+            if seq.endswith("~") or (len(seq) == 2 and seq[0] == "O"):
+                break
+        return "ESC" if not seq else _ESC_SEQUENCES.get(seq, "")
+
+    tty.setcbreak(fd)
+    try:
+        while True:
+            try:
+                if not select.select([fd], [], [], 0.1)[0]:
+                    continue
+                key = _read_key()
+                if key == "ESC":
+                    abort_all()
+                    print("\n[Jarvis] Stopped. (Esc)")
+                elif key in ("F2", "t"):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, saved)  # line mode for input()
+                    try:
+                        print("\n[Type your command] ", end="", flush=True)
+                        cmd = input()
+                    finally:
+                        tty.setcbreak(fd)
+                    if cmd.strip():
+                        _handle_typed_command(cmd.strip())
+                elif key in ("F3", "m"):
+                    toggle_mute()
+            except Exception:
+                time.sleep(0.1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def _keyboard_listener_windows() -> None:
+    """Windows: Esc = abort, F2 = type command, INSERT = mute/unmute."""
+    import msvcrt
     while True:
         try:
             if msvcrt.kbhit():
@@ -426,7 +499,7 @@ def main() -> None:
     from jarvis.web import start_web_background
 
     print("[Jarvis] Starting up...")
-    print("[Jarvis] Keys: Esc = stop | F2 = type | INSERT = mute/unmute")
+    print(f"[Jarvis] Keys: {_KEY_HINT}")
 
     start_web_background(port=7860)
     print("[Jarvis] Web UI: http://localhost:7860")
