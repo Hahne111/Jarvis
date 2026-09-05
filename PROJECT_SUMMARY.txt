@@ -3,12 +3,12 @@ Jarvis Public — Project Summary
 
 Location: C:\Users\xkosiekpcwin\jarvis-public\
 Original (private): C:\Users\xkosiekpcwin\jarvis\
-Purpose: Sanitized, sellable version of Jarvis — local AI voice assistant (Iron Man style) for Windows 11.
+Purpose: Sanitized, sellable version of Jarvis — local AI voice assistant (Iron Man style) for Windows 11 and macOS.
 
 What It Does
 -------------
 Wake word ("Hey Jarvis") → STT (Whisper) → LLM (multi-provider) → TTS (Kokoro) → follow-up loop.
-Web UI at localhost:7860. 31 tools: screen vision/OCR, desktop automation, web search, file ops, code exec, app control (30+ apps), and more.
+Web UI at localhost:7860. 32 tools: screen vision/OCR, desktop automation, web search, file ops, code exec, app control (30+ apps), and more.
 
 Stack
 ------
@@ -17,12 +17,12 @@ Stack
 - TTS: Kokoro-82M (local CPU)
 - Wake word: openWakeWord with custom hey_jarvis_v0.1.onnx
 - LLM: Ollama (default), any OpenAI-compatible provider addable via web UI
-- Vision/OCR: PyAutoGUI + Pillow screenshots → Windows PowerShell OCR
+- Vision/OCR: PyAutoGUI + Pillow screenshots → Windows PowerShell OCR / Apple Vision (macOS)
 - Memory: SQLite + ChromaDB for fact storage
 
 Key Files
 ----------
-jarvis/main.py          — Core orchestrator: wake word handler, LLM routing, abort/mute system, keyboard listener (Esc/F2/INSERT), event bus
+jarvis/main.py          — Core orchestrator: wake word handler, LLM routing, abort/mute system, keyboard listener (Esc/F2/INSERT; macOS: Esc/F2|t/F3|m), event bus
 jarvis/web.py           — FastAPI backend: WebSocket, provider CRUD (GET/POST/PUT/DELETE), settings CRUD, mute API
 jarvis/static/index.html — Iron Man HUD web UI: arc reactor, glassmorphism, 4 tabs (Tools/Live/Actions/Config), provider management modal, settings panel
 jarvis/stt.py           — Whisper STT with speech-gated silence detection
@@ -30,11 +30,12 @@ jarvis/tts.py           — Kokoro TTS with polling-based interrupt
 jarvis/wake.py          — openWakeWord listener
 jarvis/context.py       — Sliding window context manager
 jarvis/memory.py        — SQLite + ChromaDB fact extraction/search
-jarvis/tools/router.py  — 31 tools mapped (dispatch function)
+jarvis/tools/router.py  — 32 tools mapped (dispatch function)
 jarvis/tools/desktop.py — Screen vision (read_screen, find_on_screen, screenshot), mouse/keyboard, app control
 config.yaml             — All config: providers, TTS, STT, wake word, tools, context
 install.bat             — One-click installer (finds Python, creates venv, installs deps, downloads ONNX models)
 start.bat               — Launcher (activates venv, runs python -m jarvis.main)
+install.sh / start.sh   — macOS counterparts (brew deps portaudio/espeak-ng, venv, wake word models)
 requirements.txt        — 18 dependencies including pillow
 
 REST APIs (web.py)
@@ -77,7 +78,7 @@ Security Status
 Config (config.yaml — current state)
 --------------------------------------
 wake_word: {model: hey_jarvis, threshold: 0.5, chunk_size: 1280}
-stt: {model: tiny, device: cpu, compute_type: int8}
+stt: {model: small, device: auto, compute_type: int8}
 llm: {active_provider: ollama, temperature: 0.7}
   providers:
     ollama: {type: ollama, label: "Ollama (Local)", model: qwen3:8b, base_url: http://localhost:11434}

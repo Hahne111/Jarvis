@@ -1,11 +1,11 @@
 # Jarvis — Open Source AI Voice Assistant
 
-Local Iron Man-style AI voice assistant for Windows.
+Local Iron Man-style AI voice assistant for Windows and macOS.
 Wake word → listen → think → speak → follow-up. Web UI at localhost:7860.
 
 ## Requirements
 
-- **GPU**: NVIDIA GPU with 6GB+ VRAM (recommended) or CPU-only mode
+- **GPU**: NVIDIA GPU with 6GB+ VRAM (recommended) or CPU-only mode (macOS: CPU for STT/TTS, Ollama on Metal)
 - **RAM**: 16GB+ recommended
 - **TTS**: Kokoro-82M (local, CPU)
 - **STT**: Whisper small (local, CPU)
@@ -13,7 +13,7 @@ Wake word → listen → think → speak → follow-up. Web UI at localhost:7860
 - **LLM**: Configurable providers via Web UI Settings:
   - `ollama` — Any Ollama model (default)
   - Add OpenAI-compatible providers (LM Studio, NVIDIA NIM, OpenAI, etc.) from the Config tab
-- **Python**: 3.12+
+- **Python**: 3.11+ (3.12 recommended)
 
 ## Quick Start
 
@@ -23,14 +23,16 @@ git clone <repo-url> jarvis
 cd jarvis
 
 # 2. One-click install
-install.bat
+install.bat      # Windows
+./install.sh     # macOS
 
 # 3. Install Ollama and pull a model
 # https://ollama.com
 ollama pull qwen3:8b
 
 # 4. Run
-start.bat
+start.bat        # Windows
+./start.sh       # macOS
 ```
 
 Web UI opens at `http://localhost:7860`. Add providers in the **Config** tab.
@@ -47,10 +49,10 @@ Web UI opens at `http://localhost:7860`. Add providers in the **Config** tab.
 | `jarvis/wake.py` | openWakeWord listener |
 | `jarvis/context.py` | Sliding window context manager |
 | `jarvis/memory.py` | SQLite + ChromaDB fact storage |
-| `jarvis/tools/router.py` | 31 tools mapped (including subagent) |
+| `jarvis/tools/router.py` | 32 tools mapped (including subagent) |
 | `config.yaml` | All config — providers, TTS, STT, wake word, tools |
 | `requirements.txt` | Dependencies |
-| `tests/` | 32 tests |
+| `tests/` | 33 tests |
 
 ## Architecture
 
@@ -60,7 +62,7 @@ Web:   WebSocket → _process_request → broadcast to all clients
 Keyboard: F2 → input() → _process_request → speak_streamed
 ```
 
-## 31 Tools
+## 32 Tools
 
 Web search, weather, screen vision (OCR), mouse/keyboard automation, app control (30+ apps),
 file operations (sandboxed), code execution (sandboxed), volume, brightness, clipboard,
@@ -69,8 +71,8 @@ power management, notifications, timers, subagent delegation, and more.
 ## Keyboard Controls
 
 - **Esc** = abort everything
-- **F2** = type a command in terminal
-- **INSERT** = toggle mute/unmute
+- **F2** (macOS also **t**) = type a command in terminal
+- **INSERT** (Windows) / **F3** or **m** (macOS) = toggle mute/unmute
 
 ## License
 
