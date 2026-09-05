@@ -4,7 +4,7 @@ wake_word:
   chunk_size: 1280
 stt:
   model: small
-  device: cuda
+  device: auto
   compute_type: int8
 llm:
   active_provider: ollama

@@ -16,13 +16,23 @@ try:
 except ImportError:
     WhisperModel = None  # type: ignore
 
+def _resolve_device(device: str) -> str:
+    """'auto' -> 'cuda' if a CUDA device is available, else 'cpu' (macOS has no CUDA)."""
+    if device != "auto":
+        return device
+    try:
+        import ctranslate2
+        return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+    except Exception:
+        return "cpu"
+
 def _get_model(force_cpu=False):
     global _model, _model_device
     if _model is not None and not force_cpu:
         return _model
     cfg = _load_config()
     stt = cfg["stt"]
-    device = "cpu" if force_cpu else stt["device"]
+    device = "cpu" if force_cpu else _resolve_device(stt["device"])
     compute_type = "int8" if force_cpu else stt["compute_type"]
     try:
         _model = WhisperModel(stt["model"], device=device, compute_type=compute_type)
