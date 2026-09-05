@@ -1,7 +1,23 @@
 import subprocess
 import os
+import re
+import shutil
+import sys
 import threading
 import time
+
+_IS_MAC = sys.platform == "darwin"
+
+
+def _osascript(script: str) -> subprocess.CompletedProcess:
+    """Run an AppleScript snippet (macOS). No shell involved."""
+    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+
+
+def _as_str(text: str) -> str:
+    """Escape text for use inside a double-quoted AppleScript string literal."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
 
 _VOL_TYPE = """
 using System.Runtime.InteropServices;
@@ -33,6 +49,9 @@ def _run_vol_ps(ps: str) -> subprocess.CompletedProcess:
 def set_volume(level: int) -> str:
     """Set system volume (0-100) via Windows Audio API."""
     level = max(0, min(100, level))
+    if _IS_MAC:
+        _osascript(f"set volume output volume {level}")
+        return f"Volume set to {level}%."
     scalar = level / 100.0
     ps = (
         f"Add-Type -TypeDefinition @'\n{_VOL_TYPE}\n'@ -Language CSharp 2>$null;"
@@ -48,6 +67,9 @@ def set_volume(level: int) -> str:
 
 def get_volume() -> str:
     """Get current system volume (0-100)."""
+    if _IS_MAC:
+        vol = _osascript("output volume of (get volume settings)").stdout.strip()
+        return f"Volume is at {vol}%." if vol.isdigit() else "Could not read volume."
     ps = (
         f"Add-Type -TypeDefinition @'\n{_VOL_TYPE}\n'@ -Language CSharp 2>$null;"
         "$e = [MMDeviceEnumerator] -as [IMMDeviceEnumerator];"
@@ -63,6 +85,8 @@ def get_volume() -> str:
 
 def get_clipboard() -> str:
     """Return current clipboard text."""
+    if _IS_MAC:
+        return subprocess.run(["pbpaste"], capture_output=True, text=True).stdout.strip()
     result = subprocess.run(
         ["powershell", "-command", "Get-Clipboard"],
         capture_output=True, text=True,
@@ -72,6 +96,9 @@ def get_clipboard() -> str:
 
 def set_clipboard(text: str) -> str:
     """Set clipboard content."""
+    if _IS_MAC:
+        subprocess.run(["pbcopy"], input=text, text=True)
+        return "Clipboard updated."
     safe = text.replace("'", "''")
     subprocess.run(
         ["powershell", "-command", f"Set-Clipboard -Value '{safe}'"],
@@ -82,6 +109,8 @@ def set_clipboard(text: str) -> str:
 
 def get_system_info() -> str:
     """Get CPU, RAM, and disk usage."""
+    if _IS_MAC:
+        return _mac_system_info()
     ps = (
         "$cpu = (Get-CimInstance Win32_Processor).LoadPercentage;"
         "$os = Get-CimInstance Win32_OperatingSystem;"
@@ -98,9 +127,42 @@ def get_system_info() -> str:
     return result.stdout.strip() or "Could not read system info."
 
 
+def _mac_system_info() -> str:
+    """CPU/RAM/disk via top, sysctl, vm_stat and shutil (macOS)."""
+    try:
+        top = subprocess.run(["top", "-l", "1", "-n", "0", "-s", "0"], capture_output=True, text=True).stdout
+        idle = re.search(r"CPU usage:.*?([\d.]+)% idle", top)
+        cpu = f"{100 - float(idle.group(1)):.0f}" if idle else "?"
+        ram_total = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout.strip())
+        vm = subprocess.run(["vm_stat"], capture_output=True, text=True).stdout
+        page = int(re.search(r"page size of (\d+) bytes", vm).group(1))
+
+        def _pages(key: str) -> int:
+            m = re.search(rf"{key}:\s+(\d+)", vm)
+            return int(m.group(1)) if m else 0
+
+        ram_used = (_pages("Pages active") + _pages("Pages wired down") + _pages("Pages occupied by compressor")) * page
+        disk = shutil.disk_usage("/")
+        gb = 1024 ** 3
+        return (
+            f"CPU: {cpu}% | RAM: {ram_used / gb:.1f}/{ram_total / gb:.1f} GB | "
+            f"Disk /: {disk.free / gb:.1f}/{disk.total / gb:.1f} GB free"
+        )
+    except Exception:
+        return "Could not read system info."
+
+
 def set_brightness(level: int) -> str:
     """Set screen brightness (0-100). Only works on laptops."""
     level = max(0, min(100, level))
+    if _IS_MAC:
+        exe = shutil.which("brightness")
+        if not exe:
+            return "Brightness control needs the 'brightness' tool: brew install brightness"
+        result = subprocess.run([exe, f"{level / 100:.2f}"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return f"Brightness set to {level}%."
+        return f"Brightness control failed: {(result.stderr or result.stdout).strip()}"
     ps = f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{level})"
     result = subprocess.run(["powershell", "-command", ps], capture_output=True, text=True)
     if result.returncode == 0:
@@ -110,6 +172,13 @@ def set_brightness(level: int) -> str:
 
 def lock_screen() -> str:
     """Lock the workstation."""
+    if _IS_MAC:
+        cgsession = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
+        if os.path.exists(cgsession):
+            subprocess.run([cgsession, "-suspend"])
+        else:  # Ctrl+Cmd+Q (needs Accessibility permission for System Events)
+            _osascript('tell application "System Events" to keystroke "q" using {control down, command down}')
+        return "Screen locked."
     subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"])
     return "Screen locked."
 
@@ -117,6 +186,17 @@ def lock_screen() -> str:
 def power_command(action: str) -> str:
     """Shutdown, restart, or sleep the PC."""
     action = action.lower().strip()
+    if _IS_MAC:
+        if action == "shutdown":
+            _osascript('tell application "System Events" to shut down')
+            return "Shutting down."
+        elif action == "restart":
+            _osascript('tell application "System Events" to restart')
+            return "Restarting."
+        elif action == "sleep":
+            subprocess.run(["pmset", "sleepnow"], capture_output=True)
+            return "Going to sleep."
+        return f"Unknown power action: {action}. Use shutdown/restart/sleep."
     if action == "shutdown":
         subprocess.Popen(["shutdown", "/s", "/t", "5"])
         return "Shutting down in 5 seconds."
@@ -130,7 +210,14 @@ def power_command(action: str) -> str:
 
 
 def show_notification(title: str, message: str) -> str:
-    """Show a Windows toast notification."""
+    """Show a desktop notification (Windows toast / macOS Notification Center)."""
+    if _IS_MAC:
+        result = _osascript(
+            f'display notification "{_as_str(message)}" with title "{_as_str(title)}"'
+        )
+        if result.returncode == 0:
+            return f"Notification shown: {title}"
+        return f"Notification failed: {result.stderr.strip()}"
     safe_title = title.replace("'", "''")
     safe_msg = message.replace("'", "''")
     ps = (
