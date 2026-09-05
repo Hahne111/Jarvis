@@ -10,6 +10,7 @@ Endpoints
     POST /approvals/{decision_id}/approve {method, device_id, device_trusted, reference?}
     POST /approvals/{decision_id}/deny {reason?}
     POST /kill, POST /resume {method, device_id, device_trusted}
+    GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
     GET  /debug                        minimal debug dashboard (static HTML)
     GET  /memory?q&type&project        "What JARVIS Knows" (SPEC §8.4), /memory/{id}
     POST /memory/{id}/correct|forget|pin|unpin|temporary, /memory/forget_since, /memory/policy
@@ -99,6 +100,10 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, Any]:
         return runtime.health()
+
+    @app.get("/presence")
+    def presence() -> dict[str, Any]:
+        return runtime.presence.snapshot()
 
     @app.get("/events")
     def events(

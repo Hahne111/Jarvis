@@ -35,6 +35,7 @@ from core.models import (
     Tier,
 )
 from core.permissions import PermissionEngine, Policy
+from core.presence import PresenceService
 from core.verifier import (
     VerificationService,
     VerifiedExecutor,
@@ -62,6 +63,7 @@ class CoreRuntime:
     coordinator: AgentCoordinator
     memory: MemoryStore
     memory_writer: MemoryWriter
+    presence: PresenceService
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -104,6 +106,7 @@ class CoreRuntime:
             providers, router = _default_providers(
                 provider or os.environ.get("JARVIS_PROVIDER"), router
             )
+        presence = PresenceService(bus)
         coordinator = AgentCoordinator(
             bus=bus,
             executor=executor,
@@ -129,6 +132,7 @@ class CoreRuntime:
             coordinator=coordinator,
             memory=memory,
             memory_writer=memory_writer,
+            presence=presence,
             db_url=url,
         )
 
@@ -139,6 +143,7 @@ class CoreRuntime:
             "missions": len(self.missions.list()),
             "events": self.store.count(),
             "session_memory_dropped": self._drop_session_memory(),
+            "presence_devices": len(self.presence.rebuild()["devices"]),
         }
 
     def _drop_session_memory(self) -> int:
@@ -158,6 +163,7 @@ class CoreRuntime:
             "providers": {n: p.available() for n, p in self.providers.items()},
             "agent_ready": self.coordinator.can_run(),
             "memory_items": self.memory.count(),
+            "presence": self.presence.snapshot(),
             "capabilities": self.capabilities.health(),
         }
 
