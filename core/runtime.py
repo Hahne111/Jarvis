@@ -6,6 +6,8 @@ ModelRouter + IntelligenceProviders -> AgentCoordinator
 
 Provider selection (env JARVIS_PROVIDER): "claude" (default; needs the anthropic SDK installed),
 "mock" (offline scripted provider for tests/dev), "none" (agent path reports BLOCKED).
+Desktop capabilities (env JARVIS_DESKTOP): "off" (default, headless), "fake" (in-memory model),
+"prototype" (real OS via the unchanged jarvis/tools functions).
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from typing import Any
+
+from adapters.desktop import DesktopBackend, FakeDesktop, PrototypeDesktop, register_desktop
 
 from core import __version__
 from core.agents import AgentCoordinator
@@ -72,6 +76,7 @@ class CoreRuntime:
         provider: str | None = None,
         providers: dict[str, IntelligenceProvider] | None = None,
         router: ModelRouter | None = None,
+        desktop: DesktopBackend | str | None = None,
     ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
@@ -87,6 +92,11 @@ class CoreRuntime:
         )
         gateway = ExecutionGateway(capabilities, permissions, bus)
         verifiers = register_memory_verifiers(register_mock_verifiers(VerifierRegistry()), memory)
+        desktop_backend = _desktop_backend(
+            desktop if desktop is not None else os.environ.get("JARVIS_DESKTOP")
+        )
+        if desktop_backend is not None:
+            register_desktop(capabilities, verifiers, desktop_backend)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -150,6 +160,18 @@ class CoreRuntime:
             "memory_items": self.memory.count(),
             "capabilities": self.capabilities.health(),
         }
+
+
+def _desktop_backend(choice: DesktopBackend | str | None) -> DesktopBackend | None:
+    if choice is None or (isinstance(choice, str) and choice.lower() in ("", "off", "0", "false")):
+        return None
+    if not isinstance(choice, str):
+        return choice
+    if choice.lower() == "fake":
+        return FakeDesktop()
+    if choice.lower() == "prototype":
+        return PrototypeDesktop()
+    raise ValueError(f"unknown JARVIS_DESKTOP {choice!r} (off | fake | prototype)")
 
 
 def _default_providers(

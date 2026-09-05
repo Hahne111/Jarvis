@@ -36,6 +36,18 @@ _STOP = re.compile(r"^\s*(jarvis[, ]+)?(stop( everything)?|stopp|halt|abbruch)\s
 _ECHO = re.compile(r"^\s*(echo|sag|say)\s+(?P<text>.+?)\s*$", re.I | re.S)
 _CLOCK = re.compile(r"^\s*(clock|time|uhrzeit|wie sp[aä]t ist es|what time is it)\s*\??\s*$", re.I)
 _OPEN = re.compile(r"^\s*(open|öffne|oeffne)\s+(?P<url>https?://\S+)\s*$", re.I)
+_OPEN_APP = re.compile(
+    r"^\s*(open|öffne|oeffne|start|starte|launch)\s+(?P<app>[a-z0-9 ._-]{2,40})\s*$", re.I
+)
+_LOCK = re.compile(
+    r"^\s*(lock( the)?( screen| pc| computer)?"
+    r"|sperre?( den)?( bildschirm| pc| rechner)?)\s*[.!]?\s*$",
+    re.I,
+)
+_VOLUME = re.compile(r"^\s*(volume|lautst[aä]rke)( auf| to)?\s+(?P<level>\d{1,3})\s*%?\s*$", re.I)
+_WINDOWS = re.compile(
+    r"^\s*(list|show|zeige?)( the| die| alle)?( open| offenen)? (windows|fenster)\s*[?.]?\s*$", re.I
+)
 
 
 class IntentRouter:
@@ -53,4 +65,20 @@ class IntentRouter:
             return Intent("capability", "mock.clock", {}, text=text)
         if (m := _OPEN.match(text)) and "mock.open_url" in self._caps:
             return Intent("capability", "mock.open_url", {"url": m.group("url")}, text=text)
+        if _LOCK.match(text) and "system.lock_screen" in self._caps:
+            return Intent("capability", "system.lock_screen", {}, text=text)
+        if (m := _VOLUME.match(text)) and "system.set_volume" in self._caps:
+            return Intent(
+                "capability", "system.set_volume", {"level": int(m.group("level"))}, text=text
+            )
+        if _WINDOWS.match(text) and "computer.list_windows" in self._caps:
+            return Intent("capability", "computer.list_windows", {}, text=text)
+        if (m := _OPEN_APP.match(text)) and "computer.open_app" in self._caps:
+            return Intent(
+                "capability",
+                "computer.open_app",
+                {"app": m.group("app").strip()},
+                text=text,
+                confidence=0.8,
+            )
         return Intent("agent", confidence=0.0, text=text)
