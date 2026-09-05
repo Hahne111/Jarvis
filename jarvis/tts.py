@@ -42,11 +42,17 @@ def _get_voice():
             _voice_tensor = torch.load(str(local_voice), weights_only=True)
         else:
             from huggingface_hub import hf_hub_download
-            path = hf_hub_download(
-                repo_id="hexgrad/Kokoro-82M",
-                filename=f"voices/{voice_name}.pt",
-                local_files_only=True,
-            )
+            try:  # prefer the local HF cache; download on first run
+                path = hf_hub_download(
+                    repo_id="hexgrad/Kokoro-82M",
+                    filename=f"voices/{voice_name}.pt",
+                    local_files_only=True,
+                )
+            except Exception:
+                path = hf_hub_download(
+                    repo_id="hexgrad/Kokoro-82M",
+                    filename=f"voices/{voice_name}.pt",
+                )
             _voice_tensor = torch.load(path, weights_only=True)
     return _voice_tensor
 

@@ -617,7 +617,7 @@
     <select class="model-select" id="modelSelect" title="Active AI provider">
       <option value="">LOADING...</option>
     </select>
-    <button class="hud-btn" id="muteBtn" title="Mute/Unmute (INSERT key)">
+    <button class="hud-btn" id="muteBtn" title="Mute/Unmute">
       <span>&#128264;</span>
       <div class="mute-slash"></div>
     </button>
@@ -747,6 +747,7 @@
           <div class="setting-row">
             <label class="setting-label">Device</label>
             <select class="setting-select" id="s-stt-device">
+              <option value="auto">Auto (GPU if available)</option>
               <option value="cpu">CPU</option>
               <option value="cuda">GPU (CUDA)</option>
             </select>

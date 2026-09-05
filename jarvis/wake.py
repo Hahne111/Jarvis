@@ -76,7 +76,11 @@ def listen_for_wake_word(callback) -> None:
                 continue
 
             try:
-                pcm = np.frombuffer(mic.read(cfg["chunk_size"]), dtype=np.int16)
+                # exception_on_overflow=False: CoreAudio (macOS) reports input overflows
+                # whenever the loop is briefly busy — dropping the chunk is fine here.
+                pcm = np.frombuffer(
+                    mic.read(cfg["chunk_size"], exception_on_overflow=False), dtype=np.int16
+                )
             except Exception:
                 time.sleep(0.05)
                 continue

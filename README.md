@@ -5,7 +5,7 @@ A fully local, agentic AI voice assistant with wake word detection, screen visio
 > Say **"Hey Jarvis"** → ask anything → Jarvis sees your screen, controls your apps, searches the web, and speaks back.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+![Windows | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-0078D6)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
@@ -13,14 +13,14 @@ A fully local, agentic AI voice assistant with wake word detection, screen visio
 ## Features
 
 - **Voice-first interaction** — wake word detection ("Hey Jarvis"), natural speech input, streaming TTS responses
-- **31 built-in tools** — desktop automation, screen reading (OCR), app control, web search, file ops, system commands
+- **32 built-in tools** — desktop automation, screen reading (OCR), app control, web search, file ops, system commands
 - **Agentic tool chaining** — up to 15 sequential tool calls per request (click → verify → scroll → click → done)
 - **Screen vision** — reads your screen via OCR, finds UI elements by text, clicks buttons by coordinates
 - **Multiple LLM providers** — Ollama (local), LM Studio, OpenAI, NVIDIA NIM, or any OpenAI-compatible API
 - **Iron Man HUD web UI** — real-time chat, tool execution logs, provider management, settings, quick actions
 - **Persistent memory** — remembers facts across sessions using SQLite + ChromaDB semantic search
 - **Context management** — sliding window with auto-summarization to stay within token limits
-- **One-click install** — `install.bat` sets up everything, `start.bat` launches
+- **One-click install** — `install.bat` / `install.sh` sets up everything, `start.bat` / `start.sh` launches
 
 ---
 Coffe helps: https://buymeacoffee.com/azzren
@@ -30,8 +30,8 @@ Coffe helps: https://buymeacoffee.com/azzren
 
 ### Prerequisites
 
-- **Windows 10/11**
-- **Python 3.11+** — [python.org/downloads](https://www.python.org/downloads/)
+- **Windows 10/11** or **macOS** (Apple Silicon or Intel) — see [macOS](#macos) below
+- **Python 3.11+** (3.12 recommended) — [python.org/downloads](https://www.python.org/downloads/)
 - **Ollama** — [ollama.com/download](https://ollama.com/download) (for local LLM)
 
 ### 1. Install
@@ -58,7 +58,8 @@ Any Ollama model works — `qwen3:8b` is a good balance of speed and quality. Sm
 ### 3. Launch
 
 ```bash
-start.bat
+start.bat       # Windows
+./start.sh      # macOS
 ```
 
 Jarvis will:
@@ -76,6 +77,44 @@ Jarvis will:
 
 ---
 
+## macOS
+
+Tested target: iMac with Apple Silicon. Whisper runs on CPU (`stt.device: auto` picks CPU when there is no CUDA), Kokoro TTS runs on CPU, Ollama uses the GPU via Metal.
+
+### Requirements
+
+- [Homebrew](https://brew.sh), then `brew install python@3.12 portaudio espeak-ng` (install.sh does this for you)
+- [Ollama](https://ollama.com/download) running (`ollama serve`) with a pulled model (`ollama pull qwen3:8b`)
+
+### Install & start
+
+```bash
+git clone https://github.com/PanPenek/jarvis.git
+cd jarvis
+./install.sh
+./start.sh
+```
+
+### Permissions (System Settings → Privacy & Security)
+
+Grant these to the terminal app you start Jarvis from (Terminal, iTerm, VS Code):
+
+| Permission | Needed for |
+|------------|------------|
+| **Microphone** | wake word + speech input |
+| **Accessibility** | `type_text`, `press_key`, `click_at`, `focus_window`, `lock_screen` |
+| **Screen Recording** | `read_screen`, `find_on_screen`, `screenshot`, window titles in `get_open_windows` |
+
+macOS prompts on first use; if a tool silently does nothing, check the permission is enabled and restart Jarvis.
+
+### macOS notes
+
+- Keys in the terminal: **Esc** = stop, **F2** or **t** = type a command, **F3** or **m** = mute/unmute (there is no Insert key on Mac keyboards).
+- `set_brightness` needs `brew install brightness`.
+- OCR uses Apple's Vision framework (no tesseract needed); `press_key` translates `win` → `cmd` and `alt` → `option`.
+
+---
+
 ## Architecture
 
 ```
@@ -86,7 +125,7 @@ Jarvis will:
                                                 │
 ┌─────────────┐     ┌──────────────┐     ┌──────▼───────┐
 │   Web UI    │◀───▶│  Event Bus   │◀────│  Tool Router │
-│  (FastAPI)  │     │ (WebSocket)  │     │  (31 tools)  │
+│  (FastAPI)  │     │ (WebSocket)  │     │  (32 tools)  │
 └─────────────┘     └──────────────┘     └──────┬───────┘
                                                 │
                     ┌──────────────┐     ┌──────▼───────┐
@@ -101,7 +140,7 @@ Jarvis will:
 
 ---
 
-## Tools (31)
+## Tools (32)
 
 ### Desktop Automation & Vision
 | Tool | Description |
@@ -135,7 +174,7 @@ Jarvis will:
 | `set_brightness` | Screen brightness (laptops) |
 | `get_system_info` | CPU, RAM, disk usage |
 | `get_clipboard` / `set_clipboard` | Read/write clipboard |
-| `show_notification` | Windows toast notification |
+| `show_notification` | Desktop notification (Windows toast / macOS Notification Center) |
 | `set_timer` | Countdown timer with notification |
 | `lock_screen` | Lock workstation |
 | `power_command` | Shutdown, restart, or sleep |
@@ -200,7 +239,7 @@ Any OpenAI-compatible API works (LM Studio, vLLM, Together AI, Groq, etc.)
 ```yaml
 stt:
   model: small      # tiny (fastest) | base | small (default) | medium | large-v3 (best)
-  device: cuda      # cuda (GPU) or cpu — auto-falls back to CPU if CUDA fails
+  device: auto      # auto (CUDA if available, else CPU) | cuda | cpu — falls back to CPU if CUDA fails
   compute_type: int8
 ```
 
@@ -222,8 +261,8 @@ tts:
 | **"Hey Jarvis"** (busy) | Stop — interrupts current task/speech |
 | **"Stop"** / **"Cancel"** / **"Shut up"** | Voice stop command (after wake word) |
 | **Esc** | Keyboard abort — stops everything instantly |
-| **F2** | Type a command in the terminal |
-| **Insert** | Toggle mute (TTS on/off) |
+| **F2** (macOS also **t**) | Type a command in the terminal |
+| **Insert** (Windows) / **F3** or **m** (macOS) | Toggle mute (TTS on/off) |
 | **ABORT button** (web UI) | Stop current task |
 | **"stop"** (typed in web chat) | Stop current task |
 
@@ -234,8 +273,10 @@ tts:
 ```
 jarvis/
 ├── config.yaml          # All configuration
-├── install.bat          # One-click installer
-├── start.bat            # Launcher
+├── install.bat          # One-click installer (Windows)
+├── start.bat            # Launcher (Windows)
+├── install.sh           # One-click installer (macOS)
+├── start.sh             # Launcher (macOS)
 ├── requirements.txt     # Python dependencies
 │
 ├── jarvis/
@@ -270,7 +311,7 @@ jarvis/
 |-------|-----|
 | `cublas64_12.dll not found` | Normal on systems without CUDA toolkit. STT auto-falls back to CPU. |
 | Wake word not detecting | Lower `threshold` in config (try 0.3). Check your mic is set as default input. |
-| No sound from Jarvis | Check `is_muted` state (Insert key toggles). Check system audio output. |
+| No sound from Jarvis | Check `is_muted` state (Insert / F3 toggles). Check system audio output. |
 | STT recording hangs | Mic conflict resolved — wake word mic auto-pauses during recording. |
 | Ollama connection error | Make sure Ollama is running (`ollama serve`). Check `base_url` in config. |
 | Web UI not updating | Open browser console (F12) — check for `[WS]` log messages. Refresh page. |
@@ -287,7 +328,7 @@ jarvis/
 | LLM | [Ollama](https://ollama.com/) / OpenAI-compatible APIs |
 | Memory | SQLite + [ChromaDB](https://www.trychroma.com/) |
 | Web UI | [FastAPI](https://fastapi.tiangolo.com/) + WebSocket |
-| Desktop Control | [PyAutoGUI](https://pyautogui.readthedocs.io/) + PowerShell OCR |
+| Desktop Control | [PyAutoGUI](https://pyautogui.readthedocs.io/) + PowerShell OCR (Windows) / Apple Vision OCR (macOS) |
 
 ---
 

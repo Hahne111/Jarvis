@@ -16,3 +16,4 @@ fastapi>=0.115.0
 uvicorn>=0.34.0
 pytest>=8.0.0
 pytest-mock>=3.14.0
+pyobjc-framework-Vision>=10.0; sys_platform == "darwin"
