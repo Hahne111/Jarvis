@@ -4,4 +4,4 @@ Everything that has side effects runs through Permission Engine -> Execution Gat
 and emits typed events on the Event Bus. Model providers live behind interfaces in core.models.
 """
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.4.0.dev0"

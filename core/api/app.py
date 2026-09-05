@@ -12,6 +12,7 @@ Endpoints
     POST /kill, POST /resume {method, device_id, device_trusted}
     GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
     GET  /debug                        minimal debug dashboard (static HTML)
+    GET  /hud/                         web-first HUD shell (apps/desktop/web, ADR-0003)
     GET  /memory?q&type&project        "What JARVIS Knows" (SPEC §8.4), /memory/{id}
     POST /memory/{id}/correct|forget|pin|unpin|temporary, /memory/forget_since, /memory/policy
 
@@ -27,7 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from core.api.commands import execute_call, run_text_command, safe_transition, settle_agent_run
@@ -38,6 +40,7 @@ from core.permissions import ApprovalError, ApprovalProof, PolicyViolation, Proo
 from core.runtime import CoreRuntime
 
 _STATIC = Path(__file__).parent / "static"
+_HUD = Path(__file__).resolve().parents[2] / "apps" / "desktop" / "web"
 
 
 class CommandIn(BaseModel):
@@ -313,6 +316,13 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
     @app.get("/debug", response_class=HTMLResponse)
     def debug() -> str:
         return (_STATIC / "debug.html").read_text(encoding="utf-8")
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse("/hud/")
+
+    if _HUD.is_dir():
+        app.mount("/hud", StaticFiles(directory=str(_HUD), html=True), name="hud")
 
     return app
 

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/hud/hud.css">
+</head>
+<body data-state="idle">
+<header class="bar">
+  <div class="brand">J.A.R.V.I.S. <span class="ver" id="version"></span></div>
+  <div class="status" id="status">connecting…</div>
+  <div class="actions">
+    <button id="killBtn" class="danger" title="Stop everything">KILL SWITCH</button>
+    <button id="resumeBtn" title="Resume with passkey proof">RESUME</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="core-panel">
+    <div class="core" id="core" aria-live="polite">
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+      <div class="nucleus"></div>
+      <div class="label" id="coreLabel">IDLE</div>
+    </div>
+    <div class="core-meta">
+      <span id="coreDevice">core</span> · <span id="coreSince">—</span>
+      <span id="coreMission" class="mono"></span>
+    </div>
+    <form id="cmdForm" class="cmd" autocomplete="off">
+      <input id="cmdInput" placeholder="Say it: echo hello · clock · open vscode · stop" aria-label="Command">
+      <label><input type="checkbox" id="trusted" checked> trusted device</label>
+      <button type="submit">SEND</button>
+    </form>
+    <div class="latency" id="latency"></div>
+  </section>
+
+  <section class="panel approvals">
+    <h2>APPROVALS <span class="count" id="approvalCount">0</span></h2>
+    <div id="approvals" class="list"><div class="empty">Nothing waiting for you.</div></div>
+  </section>
+
+  <section class="panel rail">
+    <h2>EVENT RAIL
+      <select id="railFilter" aria-label="Filter">
+        <option value="">all</option><option value="presence">presence</option><option value="voice">voice</option>
+        <option value="mission">mission</option><option value="agent">agents</option><option value="permission">permissions</option>
+        <option value="capability">capabilities</option><option value="verification">verification</option>
+        <option value="memory">memory</option><option value="telemetry">telemetry</option>
+      </select>
+    </h2>
+    <div id="rail" class="list rail-list"></div>
+  </section>
+
+  <section class="panel missions">
+    <h2>MISSIONS</h2>
+    <div id="missions" class="list"></div>
+  </section>
+
+  <section class="panel memory">
+    <h2>WHAT JARVIS KNOWS <input id="memQuery" placeholder="search…" aria-label="Search memory"></h2>
+    <div id="memory" class="list"></div>
+  </section>
+</main>
+<script type="module" src="/hud/hud.js"></script>
+</body>
+</html>

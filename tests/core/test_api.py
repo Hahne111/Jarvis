@@ -180,3 +180,17 @@ def test_runtime_recovers_after_restart(tmp_path):
     # The pending approval survives, but the in-memory command binding does not (documented):
     r = client2.post(f"/approvals/{waiting['decision_id']}/approve", json=PROOF_CONFIRM)
     assert r.status_code == 200 and r.json()["resumed"] is False
+
+
+def test_hud_shell_is_served_from_apps_desktop_web(client):
+    r = client.get("/hud/")
+    assert r.status_code == 200 and "J.A.R.V.I.S." in r.text and "/hud/hud.js" in r.text
+    js = client.get("/hud/hud.js")
+    assert (
+        js.status_code == 200
+        and "/ws/events?after_seq=" in js.text
+        and "presence.changed" in js.text
+    )
+    css = client.get("/hud/hud.css")
+    assert css.status_code == 200 and "data-state=halted" in css.text
+    assert client.get("/", follow_redirects=False).status_code in (302, 307)
