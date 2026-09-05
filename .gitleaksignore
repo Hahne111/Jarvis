@@ -2,8 +2,8 @@
 # Test action name "secrets.dump" next to correlation_id="m3" matched generic-api-key; it is a
 # string literal in a unit test, not a credential. Renamed to "vault.export" in a later commit.
 42a59f9d35b67c6f0977ec57416ceaa2c70bdd63:tests/core/test_permissions.py:generic-api-key:238
-# Docstring wording "hashed-tokens vector, L2-normalised" and a unit-test literal next to
-# sensitivity="secret" matched generic-api-key; neither is a credential. Wording changed afterwards.
+# A docstring sentence in the embedder module and a unit-test literal next to a sensitivity
+# argument matched generic-api-key; neither is a credential. Wording changed afterwards.
 ddc8bbdcf1348c1fed08dadd4cfcff5de91f561a:core/memory/embedding.py:generic-api-key:29
 ddc8bbdcf1348c1fed08dadd4cfcff5de91f561a:tests/core/test_memory.py:generic-api-key:300
 # Unit-test literals ("0000"/"9999") next to sensitivity="secret" matched generic-api-key in the
@@ -11,3 +11,5 @@ ddc8bbdcf1348c1fed08dadd4cfcff5de91f561a:tests/core/test_memory.py:generic-api-k
 249005c3ffdb2a1837d82ea2962d933420ab9833:tests/core/test_memory_context.py:generic-api-key:101
 249005c3ffdb2a1837d82ea2962d933420ab9833:tests/core/test_memory_context.py:generic-api-key:125
 249005c3ffdb2a1837d82ea2962d933420ab9833:tests/core/test_memory_context.py:generic-api-key:183
+# The previous version of this file quoted the flagged docstring in a comment (see above).
+d92ae24f36b02ed91cd46e9e887f8773e10e2b85:.gitleaksignore:generic-api-key:5
