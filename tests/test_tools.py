@@ -1,4 +1,6 @@
 # tests/test_tools.py
+import os
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -60,10 +62,22 @@ def test_file_write_and_read(tmp_path):
 
 def test_file_read_blocked_outside_allowed(tmp_path):
     cfg = {"tools": {"allowed_paths": [str(tmp_path)], "code_timeout": 10}}
+    outside = "C:/Windows/System32/config/SAM" if sys.platform == "win32" else "/etc/passwd"
     with patch("jarvis.tools.file_ops._load_config", return_value=cfg):
         from jarvis.tools.file_ops import read_file
         with pytest.raises(PermissionError):
-            read_file("C:/Windows/System32/config/SAM")
+            read_file(outside)
+
+def test_file_ops_expand_user_home(tmp_path):
+    """'~' in a tool path must resolve like the '~' entries in allowed_paths."""
+    cfg = {"tools": {"allowed_paths": ["~/jarvis_test_dir"], "code_timeout": 10}}
+    with patch("jarvis.tools.file_ops._load_config", return_value=cfg), \
+         patch.dict(os.environ, {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}):
+        (tmp_path / "jarvis_test_dir").mkdir()
+        from jarvis.tools.file_ops import write_file, read_file, list_files
+        write_file("~/jarvis_test_dir/note.txt", "hi")
+        assert read_file("~/jarvis_test_dir/note.txt") == "hi"
+        assert "note.txt" in list_files("~/jarvis_test_dir")
 
 # --- router ---
 

@@ -3,11 +3,16 @@ from unittest.mock import patch, MagicMock
 
 STUB_CONFIG = {
     "llm": {
-        "primary": "qwen3:8b",
-        "heavy": "qwen/qwen3.5-35b-a3b",
-        "primary_base_url": "http://localhost:11434",
-        "heavy_base_url": "http://localhost:1234/v1",
+        "active_provider": "lmstudio",
         "temperature": 0.7,
+        "providers": {
+            "lmstudio": {
+                "type": "openai",
+                "model": "qwen/qwen3.5-35b-a3b",
+                "base_url": "http://localhost:1234/v1",
+            },
+            "ollama": {"type": "ollama", "model": "qwen3:8b", "base_url": "http://localhost:11434"},
+        },
     }
 }
 
@@ -44,13 +49,10 @@ def test_chat_tries_lmstudio_first():
 
 def test_chat_falls_back_to_ollama():
     """chat() should fall back to Ollama when LM Studio fails."""
-    mock_ollama = MagicMock()
-    mock_ollama.chat.return_value = MagicMock(
-        message=MagicMock(content="from ollama")
-    )
+    ollama_response = MagicMock(message=MagicMock(content="from ollama"))
     with patch("jarvis.llm._load_config", return_value=STUB_CONFIG), \
          patch("openai.OpenAI", side_effect=Exception("connection refused")), \
-         patch("ollama.Client", return_value=mock_ollama):
+         patch("ollama.chat", return_value=ollama_response):
         from jarvis.llm import chat
         result = chat([{"role": "user", "content": "test"}])
         assert result == "from ollama"
