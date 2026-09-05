@@ -45,7 +45,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12"]
+        # Prototype (jarvis/) supports 3.11+. Full requirements.txt is only installable on Linux with 3.11:
+        # openWakeWord pins tflite-runtime on Linux, which ships no wheels for 3.12+. The core (core/) targets
+        # 3.12 and gets its own lightweight job once it exists (SPEC §21 Phase 1).
+        python: ["3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,7 +75,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"  # see matrix note in the test job
           cache: pip
           cache-dependency-path: requirements.txt
       - run: |
