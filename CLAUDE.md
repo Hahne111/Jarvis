@@ -20,7 +20,8 @@ Eine Session = genau ein abgegrenzter Milestone mit Definition of Done (SPEC §2
 ## Repo-Layout (Ist)
 - `jarvis/` – bestehender Voice-Prototyp (Wake → Whisper → LLM+Tools → Kokoro, FastAPI-UI). **Legacy-Pfad, unverändert lassen** (ADR-0001). Wird capability-weise hinter den Core migriert.
 - `core/` – neuer JARVIS Core (Phase 1 läuft): `core/events/` (Envelope, EventBus, SQLEventStore) `core/missions/` (Mission/Task-Modelle, State Machine, MissionEngine, Repository) `core/permissions/` (P0–P6, Policy nur verschärfbar, Approval-Workflow, PermissionEngine) `core/capabilities/` (Manifest, Registry, Mocks `mock.echo`/`mock.clock`/`mock.open_url`, ExecutionGateway mit Timeout/Retry/Kill Switch) `core/verifier/` (Outcome, VerifierRegistry, VerificationService, RetryPolicy, VerifiedExecutor), `core/intents/` (deterministischer Fast-Path-Router), `core/api/` (FastAPI: /health, /events, /ws/events, /commands, /missions, /approvals, /kill, /resume, /debug) `core/runtime.py` (CoreRuntime verdrahtet alles; `python -m core` startet auf 127.0.0.1:7870) `core/models/` (IntelligenceProvider-Interface, ModelRouter Fast/Smart/Deep, AgentBudget, MockProvider, ClaudeProvider – Anthropic SDK optional via `pip install anthropic`, Key nur über Umgebung/Credential-Broker) und `core/agents/` (AgentCoordinator: Router → Provider → Allowlist → VerifiedExecutor → Budget; pausiert bei Approval und setzt aus dem Event-Log fort; Subagent-Rollen research/implementation/test/verification/security über Tool `agent.delegate`, kontext-isoliert, Tiefe 1, gemeinsames Budget; `JARVIS_PROVIDER=claude|mock|none`) und `core/memory/` (MemoryItem nach SPEC §8.2, MemoryStore mit lexikalischer Suche + austauschbarem Embedder, MemoryWriter: Privacy-Filter, Reinforcement, Korrektur als neue Version, Forget/Forget-Window/Pin/Temporary; ContextBuilder speist relevante, nicht-geheime Items in den Agent-Systemprompt; Capabilities `memory.recall|remember|correct|forget` über das Gateway; API `/memory*` = „What JARVIS Knows“; Events tragen nie den Wert) vorhanden; state und scheduler folgen. Eigene Abhängigkeiten: `core/requirements.txt`.
-- `adapters/`, `voice/`, `apps/`, `skills/`, `mcp/`, `packages/` – gemäß SPEC §20, entstehen phasenweise.
+- `voice/` – Voice 0.1 (Phase 5): Interfaces `WakeWordDetector`/`SpeechToText`/`TextToSpeech`/`TurnDetector`, `VoiceSession`-Zustandsautomat (idle → wake_ack → listening → thinking → speaking → follow_up) mit `voice.*`-Events, `VoiceBridge` (Wake-Ack zuerst, Transkript → `core/api/commands.run_text_command`, phrase-level TTS-Streaming, Barge-in, „Jarvis, stop“ ⇒ Kill Switch), `LatencyTelemetry` (`telemetry.latency`-Events, p50/p95), `SpokenStyle` (No-Filler, „Done.“), Fakes in `voice/fakes.py`, Prototyp-Adapter in `voice/adapters/prototype.py` (importiert `jarvis/` unverändert). `python -m voice` (Hardware) bzw. `JARVIS_VOICE_FAKE=1 python -m voice` (Tastatur).
+- `adapters/`, `apps/`, `skills/`, `mcp/`, `packages/` – gemäß SPEC §20, entstehen phasenweise.
 - `infra/docker/` – Docker Compose (PostgreSQL + pgvector). `.env` lokal aus `.env.example`.
 - `tests/` – Prototyp-Tests (`tests/test_*.py`), Core-Tests unter `tests/core/`.
 - `docs/` – Blueprint-PDF, SPEC, SECURITY, PERFORMANCE, STATUS, `decisions/ADR-*`.
@@ -46,6 +47,9 @@ docker compose -f infra/docker/docker-compose.yml up -d
 
 # Core starten (Debug-Dashboard http://127.0.0.1:7870/debug, DB: jarvis/data/core.db oder JARVIS_CORE_DB_URL)
 python -m core                      # Provider: JARVIS_PROVIDER=claude (Default, braucht anthropic SDK + Key) | mock | none
+
+# Voice-Loop gegen den Core (Prototyp-Audio-Stack; JARVIS_VOICE_FAKE=1 für Tastatur statt Mikrofon)
+python -m voice
 
 # Prototyp starten
 ./start.sh | start.bat  # Web-UI http://127.0.0.1:7860

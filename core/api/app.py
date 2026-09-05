@@ -29,11 +29,10 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from core.agents import AgentRun, RunOutcome
-from core.capabilities.gateway import InvocationStatus
+from core.api.commands import execute_call, run_text_command, safe_transition, settle_agent_run
 from core.events.envelope import Event
 from core.memory import MemoryPolicyError, MemoryType
-from core.missions import InvalidTransition, MissionNotFound, MissionStatus
+from core.missions import MissionNotFound, MissionStatus
 from core.permissions import ApprovalError, ApprovalProof, PolicyViolation, ProofMethod
 from core.runtime import CoreRuntime
 
@@ -138,66 +137,14 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
 
     @app.post("/commands")
     async def commands(body: CommandIn) -> dict[str, Any]:
-        intent = runtime.intents.route(body.text)
-        if intent.kind == "stop":
-            await runtime.gateway.halt(f"stop command: {body.text.strip()}")
-            return {"route": "stop", "halted": True}
-
-        mission = await runtime.missions.create(
-            body.text.strip(),
+        return await run_text_command(
+            runtime,
+            body.text,
+            user_id=body.user_id,
             device_id=body.device_id,
-            owner=body.user_id,
-            context={"intent": intent.to_dict(), "device_trusted": body.device_trusted},
+            device_trusted=body.device_trusted,
+            source="core-api",
         )
-        mid = mission.mission_id
-        await runtime.bus.publish(
-            Event.new(
-                "command.received",
-                "core-api",
-                {"text": body.text, "intent": intent.to_dict(), "mission_id": mid},
-                correlation_id=mid,
-                user_id=body.user_id,
-                device_id=body.device_id,
-            )
-        )
-        await runtime.missions.transition(mid, MissionStatus.PLANNING)
-
-        if intent.kind != "capability":
-            # Deep Path: hand the goal to the Agent Coordinator, or say that none is configured.
-            if runtime.coordinator.can_run():
-                await runtime.missions.transition(mid, MissionStatus.RUNNING)
-                run = await runtime.coordinator.run(
-                    mid,
-                    body.text.strip(),
-                    allowlist=set(runtime.capabilities.names()),
-                    user_id=body.user_id,
-                    device_id=body.device_id,
-                    device_trusted=body.device_trusted,
-                )
-                return await _settle_agent_run(runtime, run)
-            await runtime.missions.transition(
-                mid, MissionStatus.BLOCKED, reason="no intelligence provider configured"
-            )
-            return {
-                "route": "agent",
-                "mission_id": mid,
-                "status": "blocked",
-                "intent": intent.to_dict(),
-            }
-
-        await runtime.missions.transition(mid, MissionStatus.RUNNING)
-        call = {
-            "capability": intent.capability,
-            "args": intent.args,
-            "kw": {
-                "actor": "intent-router",
-                "correlation_id": mid,
-                "user_id": body.user_id,
-                "device_id": body.device_id,
-                "device_trusted": body.device_trusted,
-            },
-        }
-        return await _execute(runtime, mid, call)
 
     # -- missions ------------------------------------------------------------------------------
 
@@ -227,7 +174,7 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         pending = runtime.pending_commands.pop(decision_id, None)
         if pending is not None:
             pending["kw"]["decision_id"] = decision_id
-            result = await _execute(runtime, pending["mission_id"], pending)
+            result = await execute_call(runtime, pending["mission_id"], pending)
             return {"decision": decision.to_dict(), "resumed": True, **result}
         run = await runtime.coordinator.resume(decision_id)  # paused agent run in the event log?
         if run is not None:
@@ -235,7 +182,7 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
                 await runtime.missions.transition(
                     run.mission_id, MissionStatus.RUNNING, reason="approved"
                 )
-            result = await _settle_agent_run(runtime, run)
+            result = await settle_agent_run(runtime, run)
             return {"decision": decision.to_dict(), "resumed": True, **result}
         return {"decision": decision.to_dict(), "resumed": False}
 
@@ -247,7 +194,7 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             raise HTTPException(409, str(exc)) from None
         pending = runtime.pending_commands.pop(decision_id, None)
         mission_id = pending["mission_id"] if pending else decision.request.correlation_id
-        await _safe_transition(runtime, mission_id, MissionStatus.CANCELED, body.reason or "denied")
+        await safe_transition(runtime, mission_id, MissionStatus.CANCELED, body.reason or "denied")
         return {"decision": decision.to_dict()}
 
     # -- kill switch ---------------------------------------------------------------------------
@@ -377,64 +324,3 @@ async def _memory_action(runtime: CoreRuntime, memory_id: str, *, pinned: bool) 
         return (await runtime.memory_writer.pin(memory_id, pinned)).to_dict()
     except KeyError:
         raise HTTPException(404, "memory not found") from None
-
-
-async def _safe_transition(runtime: CoreRuntime, mid: str, to: MissionStatus, reason: str) -> None:
-    try:
-        await runtime.missions.transition(mid, to, reason=reason)
-    except (InvalidTransition, MissionNotFound):
-        pass  # mission already terminal or gone; the event log still has the full story
-
-
-async def _settle_agent_run(runtime: CoreRuntime, run: AgentRun) -> dict[str, Any]:
-    """Map an AgentRun outcome onto the mission state machine and build the API response."""
-    mid = run.mission_id
-    payload: dict[str, Any] = {"route": "agent", "mission_id": mid, "run": run.to_dict()}
-    if run.outcome is RunOutcome.AWAITING_APPROVAL:
-        await _safe_transition(
-            runtime, mid, MissionStatus.WAITING_FOR_APPROVAL, "approval required"
-        )
-        return {**payload, "status": "waiting_for_approval", "decision_id": run.pending_decision_id}
-    if run.outcome is RunOutcome.HALTED:
-        await _safe_transition(runtime, mid, MissionStatus.PAUSED, "kill switch")
-        return {**payload, "status": "halted"}
-    if run.outcome is RunOutcome.COMPLETED:
-        await _safe_transition(runtime, mid, MissionStatus.VERIFYING, "agent finished")
-        await _safe_transition(runtime, mid, MissionStatus.COMPLETED, "agent run completed")
-        return {**payload, "status": "completed", "result": run.final_text}
-    await _safe_transition(runtime, mid, MissionStatus.FAILED, f"{run.outcome.value}: {run.error}")
-    return {**payload, "status": "failed", "error": run.error}
-
-
-async def _execute(runtime: CoreRuntime, mid: str, call: dict[str, Any]) -> dict[str, Any]:
-    """Run one capability call for a mission via the verified executor; settle the mission."""
-    kw = dict(call["kw"])
-    kw["correlation_id"] = mid
-    if runtime.missions.get(mid).status is MissionStatus.WAITING_FOR_APPROVAL:
-        await runtime.missions.transition(mid, MissionStatus.RUNNING, reason="approved")
-    result = await runtime.executor.run(call["capability"], call["args"], **kw)
-    inv, ver = result.invocation, result.verification
-    payload: dict[str, Any] = {
-        "route": "capability",
-        "mission_id": mid,
-        "invocation": inv.to_dict(),
-        "verification": ver.to_dict(),
-        "attempts": result.attempts,
-    }
-    if inv.status is InvocationStatus.AWAITING_APPROVAL:
-        runtime.pending_commands[inv.decision_id] = {**call, "mission_id": mid}  # type: ignore[index]
-        await _safe_transition(
-            runtime, mid, MissionStatus.WAITING_FOR_APPROVAL, "approval required"
-        )
-        return {**payload, "status": "waiting_for_approval", "decision_id": inv.decision_id}
-    if inv.status is InvocationStatus.HALTED:
-        await _safe_transition(runtime, mid, MissionStatus.PAUSED, "kill switch")
-        return {**payload, "status": "halted"}
-    await _safe_transition(runtime, mid, MissionStatus.VERIFYING, "tool finished")
-    if result.ok:
-        await _safe_transition(runtime, mid, MissionStatus.COMPLETED, "verified")
-        return {**payload, "status": "completed", "result": inv.result}
-    await _safe_transition(
-        runtime, mid, MissionStatus.FAILED, f"{inv.status.value}/{ver.outcome.value}: {inv.error}"
-    )
-    return {**payload, "status": "failed", "error": inv.error or ver.reason}
