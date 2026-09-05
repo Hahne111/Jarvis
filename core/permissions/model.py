@@ -188,6 +188,7 @@ class PermissionDecision:
     approval_proof: ApprovalProof | None = None
     created_at: datetime = field(default_factory=_now)
     expires_at: datetime | None = None  # ASK: approval deadline; ALLOW: grant expiry
+    used_at: datetime | None = None  # ALLOW grants are single-use once consumed by the gateway
     reason: str | None = None
 
     @property
@@ -211,6 +212,7 @@ class PermissionDecision:
             "approval_proof": self.approval_proof.to_dict() if self.approval_proof else None,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "used_at": self.used_at.isoformat() if self.used_at else None,
             "reason": self.reason,
         }
 
@@ -227,5 +229,6 @@ class PermissionDecision:
             ),
             created_at=datetime.fromisoformat(d["created_at"]),
             expires_at=datetime.fromisoformat(d["expires_at"]) if d.get("expires_at") else None,
+            used_at=datetime.fromisoformat(d["used_at"]) if d.get("used_at") else None,
             reason=d.get("reason"),
         )

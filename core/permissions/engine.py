@@ -5,9 +5,9 @@ Flow:  evaluate(request) -> ALLOW (time-limited grant) | ASK (pending approval) 
        deny(decision_id)           -> DENY
        is_granted(decision_id)     -> True only for an unexpired ALLOW (used by the gateway)
 
-Every decision is an event on the bus (``permission.allowed|ask|approved|denied``), correlated
-with the request (normally the mission). Pending approvals and grants are rebuilt from the log
-after a restart; nothing here is secret - proofs carry references, never credentials.
+Every decision is an event on the bus (``permission.allowed|ask|approved|denied|consumed``),
+correlated with the request (normally the mission). Pending approvals and grants are rebuilt
+from the log after a restart; nothing here is secret - proofs carry references, never credentials.
 """
 
 from __future__ import annotations
@@ -72,7 +72,12 @@ class PermissionEngine:
 
     def is_granted(self, decision_id: str) -> bool:
         d = self._decisions.get(decision_id)
-        return d is not None and d.decision is Decision.ALLOW and not d.is_expired(self._clock())
+        return (
+            d is not None
+            and d.decision is Decision.ALLOW
+            and d.used_at is None
+            and not d.is_expired(self._clock())
+        )
 
     # -- commands ------------------------------------------------------------------------------
 
@@ -132,6 +137,15 @@ class PermissionEngine:
         d.reason = reason
         d.expires_at = None
         await self._record(d, "permission.denied")
+        return d
+
+    async def consume(self, decision_id: str) -> PermissionDecision:
+        """Mark an ALLOW grant as used (single-use). Only the Execution Gateway calls this."""
+        if not self.is_granted(decision_id):
+            raise ApprovalError(f"decision {decision_id} is not an active grant")
+        d = self.get(decision_id)
+        d.used_at = self._clock()
+        await self._record(d, "permission.consumed")
         return d
 
     async def expire_stale(self) -> int:
