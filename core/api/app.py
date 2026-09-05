@@ -29,6 +29,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from adapters.home import HomeUnavailable
 from adapters.workspace import WorkspaceError
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -134,6 +135,17 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
     @app.get("/presence")
     def presence() -> dict[str, Any]:
         return runtime.presence.snapshot()
+
+    @app.get("/home")
+    async def home() -> dict[str, Any]:
+        """Rooms, devices and the home state (read-only; actions go through the gate)."""
+        if runtime.home is None:
+            return {"enabled": False}
+        try:
+            online = await runtime.home.sync()
+        except HomeUnavailable:
+            online = False
+        return {"enabled": True, "online": online, **runtime.home.snapshot()}
 
     @app.get("/events")
     def events(

@@ -6,6 +6,8 @@ ModelRouter + IntelligenceProviders -> AgentCoordinator
 
 Provider selection (env JARVIS_PROVIDER): "claude" (default; needs the anthropic SDK installed),
 "mock" (offline scripted provider for tests/dev), "none" (agent path reports BLOCKED).
+Home capabilities (env JARVIS_HOME): "off" (default), "fake" (in-memory home), "homeassistant"
+(REST; JARVIS_HA_URL + JARVIS_HA_TOKEN from the environment only).
 Desktop capabilities (env JARVIS_DESKTOP): "off" (default, headless), "fake" (in-memory model),
 "prototype" (real OS via the unchanged jarvis/tools functions).
 """
@@ -17,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from adapters.desktop import DesktopBackend, FakeDesktop, PrototypeDesktop, register_desktop
+from adapters.home import FakeHome, HomeAssistantBackend, HomeBackend, HomeService, register_home
 from adapters.workspace import WorkspaceManager, register_workspace
 
 from core import __version__
@@ -67,6 +70,7 @@ class CoreRuntime:
     memory_writer: MemoryWriter
     presence: PresenceService
     workspaces: WorkspaceManager
+    home: HomeService | None
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -83,6 +87,7 @@ class CoreRuntime:
         router: ModelRouter | None = None,
         desktop: DesktopBackend | str | None = None,
         workspace_root: str | None = None,
+        home: HomeBackend | str | None = None,
     ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
@@ -107,6 +112,10 @@ class CoreRuntime:
             workspace_root or os.environ.get("JARVIS_WORKSPACE_ROOT", DEFAULT_WORKSPACE_ROOT)
         )
         register_workspace(capabilities, verifiers, bus, workspaces)
+        home_backend = _home_backend(home if home is not None else os.environ.get("JARVIS_HOME"))
+        home_service = HomeService(home_backend, bus) if home_backend is not None else None
+        if home_service is not None:
+            register_home(capabilities, verifiers, home_service)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -143,6 +152,7 @@ class CoreRuntime:
             memory_writer=memory_writer,
             presence=presence,
             workspaces=workspaces,
+            home=home_service,
             db_url=url,
         )
 
@@ -154,7 +164,14 @@ class CoreRuntime:
             "events": self.store.count(),
             "session_memory_dropped": self._drop_session_memory(),
             "presence_devices": len(self.presence.rebuild()["devices"]),
+            "home_state": self._rebuild_home(),
         }
+
+    def _rebuild_home(self) -> str | None:
+        if self.home is None:
+            return None
+        self.home.rebuild()
+        return self.home.states.current.value
 
     def _drop_session_memory(self) -> int:
         import asyncio
@@ -174,6 +191,7 @@ class CoreRuntime:
             "agent_ready": self.coordinator.can_run(),
             "memory_items": self.memory.count(),
             "presence": self.presence.snapshot(),
+            "home": self.home.states.current.value if self.home else None,
             "capabilities": self.capabilities.health(),
         }
 
@@ -188,6 +206,18 @@ def _desktop_backend(choice: DesktopBackend | str | None) -> DesktopBackend | No
     if choice.lower() == "prototype":
         return PrototypeDesktop()
     raise ValueError(f"unknown JARVIS_DESKTOP {choice!r} (off | fake | prototype)")
+
+
+def _home_backend(choice: HomeBackend | str | None) -> HomeBackend | None:
+    if choice is None or (isinstance(choice, str) and choice.lower() in ("", "off", "0", "false")):
+        return None
+    if not isinstance(choice, str):
+        return choice
+    if choice.lower() == "fake":
+        return FakeHome()
+    if choice.lower() in ("homeassistant", "ha"):
+        return HomeAssistantBackend()
+    raise ValueError(f"unknown JARVIS_HOME {choice!r} (off | fake | homeassistant)")
 
 
 def _default_providers(

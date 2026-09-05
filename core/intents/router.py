@@ -45,6 +45,51 @@ _LOCK = re.compile(
     re.I,
 )
 _VOLUME = re.compile(r"^\s*(volume|lautst[aä]rke)( auf| to)?\s+(?P<level>\d{1,3})\s*%?\s*$", re.I)
+_ROOM = r"[a-zäöüß][a-zäöüß_ ]{1,30}"
+# Home fast path (SPEC §11 / Phase 8 step 56: offline basics without any model)
+_LIGHT_A = re.compile(  # "turn the kitchen light on", "küche licht aus", "licht an"
+    rf"^\s*((turn|switch|schalte?|mach)\s+)?((the|das|die)\s+)?(?P<room>{_ROOM}?)?\s*"
+    r"(lights?|licht)\s+(?P<on>on|off|an|aus|ein)\s*[.!]?\s*$",
+    re.I,
+)
+_LIGHT_B = re.compile(  # "turn on the kitchen lights", "schalte das licht im flur aus"
+    rf"^\s*(turn|switch|schalte?|mach)\s+(?P<on>on|off|an|aus|ein)\s+((the|das|die)\s+)?"
+    rf"(?P<room>{_ROOM}?)?\s*(lights?|licht)\s*[.!]?\s*$",
+    re.I,
+)
+_LIGHT_C = re.compile(  # "licht an im wohnzimmer", "lights off in the kitchen"
+    rf"^\s*(lights?|licht)\s+(?P<on>on|off|an|aus|ein)(\s+(im|in der|in dem|in the|in)\s+"
+    rf"(?P<room>{_ROOM}))?\s*[.!]?\s*$",
+    re.I,
+)
+_LIGHT_D = re.compile(  # "schalte das licht in der küche aus", "turn the light in the kitchen off"
+    r"^\s*(turn|switch|schalte?|mach)\s+((the|das|die)\s+)?(lights?|licht)\s+"
+    rf"(im|in der|in dem|in the|in)\s+(?P<room>{_ROOM}?)\s+(?P<on>on|off|an|aus|ein)\s*[.!]?\s*$",
+    re.I,
+)
+_SCENE = re.compile(
+    rf"^\s*((activate|aktiviere|start|starte)\s+)?(scene|szene)\s+(?P<name>{_ROOM})\s*[.!]?\s*$",
+    re.I,
+)
+_HOME_STATE = re.compile(
+    r"^\s*((set|setze)\s+)?(home\s*)?(state|mode|modus|status)(\s+to|\s+auf)?\s+"
+    r"(?P<state>home|away|sleep|work|movie|guests|night|vacation)\s*[.!]?\s*$",
+    re.I,
+)
+_HOME_PHRASES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"^\s*(ich bin (wieder )?(zu ?hause|da)|i'?m (back )?home)\s*[.!]?\s*$", re.I),
+        "home",
+    ),
+    (
+        re.compile(
+            r"^\s*(ich (gehe|bin weg)|i'?m (leaving|out|away)|bin dann weg)\s*[.!]?\s*$", re.I
+        ),
+        "away",
+    ),
+    (re.compile(r"^\s*(gute nacht|good ?night|schlafenszeit)\s*[.!]?\s*$", re.I), "sleep"),
+    (re.compile(r"^\s*(filmabend|movie (time|night|mode)|kino ?modus)\s*[.!]?\s*$", re.I), "movie"),
+)
 _WINDOWS = re.compile(
     r"^\s*(list|show|zeige?)( the| die| alle)?( open| offenen)? (windows|fenster)\s*[?.]?\s*$", re.I
 )
@@ -71,6 +116,8 @@ class IntentRouter:
             return Intent(
                 "capability", "system.set_volume", {"level": int(m.group("level"))}, text=text
             )
+        if (home := self._home_intent(text)) is not None:
+            return home
         if _WINDOWS.match(text) and "computer.list_windows" in self._caps:
             return Intent("capability", "computer.list_windows", {}, text=text)
         if (m := _OPEN_APP.match(text)) and "computer.open_app" in self._caps:
@@ -82,3 +129,26 @@ class IntentRouter:
                 confidence=0.8,
             )
         return Intent("agent", confidence=0.0, text=text)
+
+    def _home_intent(self, text: str) -> Intent | None:
+        if "home.light.set" in self._caps:
+            for rx in (_LIGHT_D, _LIGHT_B, _LIGHT_C, _LIGHT_A):
+                if m := rx.match(text):
+                    room = (m.group("room") or "").strip().lower() or "all"
+                    on = m.group("on").lower() in ("on", "an", "ein")
+                    return Intent(
+                        "capability", "home.light.set", {"target": room, "on": on}, text=text
+                    )
+        if (m := _SCENE.match(text)) and "home.scene.activate" in self._caps:
+            return Intent(
+                "capability", "home.scene.activate", {"target": m.group("name").strip()}, text=text
+            )
+        if "home.state.set" in self._caps:
+            if m := _HOME_STATE.match(text):
+                return Intent(
+                    "capability", "home.state.set", {"state": m.group("state").lower()}, text=text
+                )
+            for rx, state in _HOME_PHRASES:
+                if rx.match(text):
+                    return Intent("capability", "home.state.set", {"state": state}, text=text)
+        return None
