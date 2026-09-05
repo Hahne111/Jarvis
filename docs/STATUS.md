@@ -1,8 +1,9 @@
 # JARVIS – STATUS
 
 Current version: 0.0.1 (Foundation)
-Current phase: PHASE 0 – Foundation / Source of Truth (abgeschlossen, CI-Lauf auf GitHub noch zu bestätigen)
-Last completed milestone: Phase 0 – Blueprint als Source of Truth im Repo (PDF, SPEC.md, SECURITY.md, PERFORMANCE.md, ADR-0000..0002, CLAUDE.md), Docker Compose PostgreSQL/pgvector + `.env.example`, CI (format, lint, tests, secret scan, smoke), lokale Testsuite grün (33/33).
+Current phase: PHASE 0 – Foundation / Source of Truth (abgeschlossen; Exit-Kriterien erfüllt, siehe unten)
+Last completed milestone: Phase 0 – Blueprint als Source of Truth im Repo (PDF, SPEC.md, SECURITY.md, PERFORMANCE.md, ADR-0000..0002, CLAUDE.md), Docker Compose PostgreSQL/pgvector + `.env.example`, CI (format, lint, tests, secret scan, smoke). Exit-Kriterien: Clean clone → `pip install -r requirements.txt` → 33/33 Tests grün (GitHub Actions Run 33957387633 auf Python 3.11, lokal auch auf 3.12 ohne openWakeWord); gitleaks ohne Fund; ADR-0000..0002 vorhanden.
+Note: Volle requirements.txt ist unter Linux nur mit Python 3.11 installierbar (openWakeWord → tflite-runtime ohne 3.12-Wheels); Windows/macOS sind nicht betroffen. Core (`core/`) zielt auf 3.12 und bekommt ab Phase 1 einen eigenen schlanken CI-Job.
 Active branch: claude/leg-los-lkj4yb
 Known blockers:
 - **Repo-Sichtbarkeit:** `Hahne111/Jarvis` ist aktuell PUBLIC. Blueprint §18/Phase 0 verlangt ein privates Repository (Spec, Memory-Konzepte, spätere Releases). Owner-Entscheidung: Repo auf private stellen oder Blueprint-PDF/SPEC bewusst öffentlich lassen.
