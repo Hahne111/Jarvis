@@ -28,8 +28,9 @@ Eine Session = genau ein abgegrenzter Milestone mit Definition of Done (SPEC §2
 - `skills/` – Skill Factory (Phase 12, SPEC §15): `skills/sdk/` (`SkillManifest`, `SkillContext` = einzige Brücke: `call()` nur deklarierte Capabilities, durch das Gateway, nie trusted; `Skill`-Basisklasse), `skills/examples/hello_world/`. Core-Seite `core/skills/`: `SkillReviewer` (AST-Allowlist, verbietet OS/Netz/Dateien/Core-Imports, `open/eval`, Dunder), `SkillRegistry` (Review → Sandbox-Tests im Workspace-Runner → versionierte Installation `jarvis/data/skills/<name>/<version>` → Capabilities `skill.<name>.<cap>` mit Manifest-Risk + Skill-Verifier; Disable/Rollback/Restore), Capabilities `skill.list|review` P0, `skill.install` P3 (Approval), `skill.enable|disable|rollback` P2; API `/skills*`. `JARVIS_SKILLS_ROOT`.
 - `mcp/`, `packages/` – gemäß SPEC §20, entstehen phasenweise.
 - `infra/docker/` – Docker Compose (PostgreSQL + pgvector). `.env` lokal aus `.env.example`.
-- `tests/` – Prototyp-Tests (`tests/test_*.py`), Core-Tests unter `tests/core/`.
-- `docs/` – Blueprint-PDF, SPEC, SECURITY, PERFORMANCE, STATUS, HUD_EVENTS (Event-Vertrag für die Shell), `decisions/ADR-*`.
+- `tests/` – Prototyp-Tests (`tests/test_*.py`), Core-Tests unter `tests/core/`, Regression-Suite 1.0 unter `tests/regression/` (Release/Updater/Backup, Security-Invarianten, Performance-Budgets, Golden Scenarios SPEC §24.1; eigener CI-Job).
+- `release/` – nur der öffentliche Release-Schlüssel `jarvis-release.pub` (Owner erzeugt ihn mit `python -m core.release keygen`; Private Key nie im Repo, nur GitHub-Secret `JARVIS_RELEASE_SIGNING_KEY`). Tooling: `core/release.py` (Archiv/Sums/Sign/Verify), `core/updater.py` (signierte Updates mit Smoke-Test und Rollback, `JARVIS_INSTALL_ROOT`), `core/backup.py` (AES-GCM-Backup, Passphrase nur aus `JARVIS_BACKUP_PASSPHRASE`); Ablauf in `docs/RELEASE.md`, Workflow `.github/workflows/release.yml` (Tag `v*`).
+- `docs/` – Blueprint-PDF, SPEC, SECURITY, PERFORMANCE, STATUS, HUD_EVENTS (Event-Vertrag für die Shell), RELEASE (Install/Update/Rollback/Backup), `decisions/ADR-*`.
 
 ## Build / Test / Lint
 ```bash
@@ -41,6 +42,7 @@ install.bat             # Windows
 # Tests
 pytest -q               # alles; Linux headless: xvfb-run -a pytest -q
 pytest -q tests/core    # nur Core (braucht nur core/requirements.txt, Python 3.12)
+pytest -q tests/regression  # Regression-Suite 1.0 (Release/Updater/Backup, Security, Performance, Golden Scenarios)
 
 # Lint / Format (Konfiguration: ruff.toml)
 ruff check .            # Fatal-Regeln im Altcode; strikt für core/ und tests/core/ (core/ruff.toml, tests/core/ruff.toml)

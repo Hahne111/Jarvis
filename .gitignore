@@ -13,3 +13,7 @@ dist/
 
 # HUD vendor bundles (fetched by apps/desktop/web/vendor/fetch_monaco.py)
 apps/desktop/web/vendor/monaco/
+
+# Release signing: only the public key is committed
+release/*.key
+*.jbk
