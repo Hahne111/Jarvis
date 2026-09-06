@@ -50,6 +50,7 @@ from core.models import (
     ModelSpec,
     Tier,
 )
+from core.news import FakeNewsSource, NewsPipeline, NewsStore, register_news, sources_from_env
 from core.notify import PushService, PushTransport, push_transport_from_env
 from core.permissions import PermissionEngine, Policy
 from core.presence import PresenceService
@@ -88,6 +89,7 @@ class CoreRuntime:
     devices: DeviceRegistry
     auth: DeviceAuthenticator
     notify: PushService | None
+    news: NewsPipeline | None
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -107,6 +109,7 @@ class CoreRuntime:
         home: HomeBackend | str | None = None,
         wol: WolService | None = None,
         push: PushTransport | str | None = None,
+        news: NewsPipeline | str | None = None,
     ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
@@ -138,6 +141,9 @@ class CoreRuntime:
         wol_service = wol if wol is not None else _wol_service(home, bus)
         if wol_service is not None:
             register_wol(capabilities, verifiers, wol_service)
+        news_pipeline = news if isinstance(news, NewsPipeline) else _news_pipeline(news, bus, store)
+        if news_pipeline is not None:
+            register_news(capabilities, news_pipeline)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -187,6 +193,7 @@ class CoreRuntime:
             devices=devices,
             auth=auth,
             notify=notify,
+            news=news_pipeline,
             db_url=url,
         )
 
@@ -228,6 +235,7 @@ class CoreRuntime:
             "home": self.home.states.current.value if self.home else None,
             "devices": self.devices.count(),
             "push": self.notify.transport.name if self.notify else None,
+            "news": self.news.store.count() if self.news else None,
             "capabilities": self.capabilities.health(),
         }
 
@@ -256,6 +264,20 @@ def _wol_service(home_choice: HomeBackend | str | None, bus: EventBus) -> WolSer
         net = FakeNetwork(mac_to_host={t.mac.lower(): t.host for t in demo})
         return WolService(demo, bus, net, verify_timeout_s=2.0)
     return None
+
+
+def _news_pipeline(choice: str | None, bus: EventBus, store: SQLEventStore) -> NewsPipeline | None:
+    """JARVIS_NEWS: off (default) | fake (demo stories) | rss (JARVIS_NEWS_FEEDS)."""
+    c = (choice if choice is not None else os.environ.get("JARVIS_NEWS") or "off").lower()
+    if c in ("", "off", "0", "false"):
+        return None
+    if c == "fake":
+        from core.news.demo import demo_items
+
+        return NewsPipeline(bus, NewsStore(store.engine), [FakeNewsSource("demo", demo_items())])
+    if c == "rss":
+        return NewsPipeline(bus, NewsStore(store.engine), list(sources_from_env()))
+    raise ValueError(f"unknown JARVIS_NEWS {choice!r} (off | fake | rss)")
 
 
 def _home_backend(choice: HomeBackend | str | None) -> HomeBackend | None:

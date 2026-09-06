@@ -13,6 +13,8 @@ Endpoints
     GET  /devices, POST /devices/enroll/start, POST /devices/enroll, POST /devices/{id}/revoke|trust
     POST /missions/{id}/handover {to_device_id}   move responsibility desktop <-> mobile
     GET  /notifications                             push deliveries (notify.sent|failed)
+    GET  /news?country&topic&limit, /news/countries, /news/{id}, POST /news/refresh   globe data
+    POST /telemetry {point, ms}                     HUD frame/input timings -> telemetry.latency
     Signed requests (X-Jarvis-Device/Timestamp/Nonce/Signature) bind device_trusted to the
     registry; unsigned callers are trusted only from loopback (core/devices/auth.py, ADR-0004)
     GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
@@ -153,6 +155,13 @@ class RevokeIn(BaseModel):
 
 class TrustIn(BaseModel):
     trusted: bool
+
+
+class TelemetryIn(BaseModel):
+    point: str = Field(pattern=r"^(hud_frame|hud_input|globe_frame|hud_mode_switch)$")
+    ms: float = Field(ge=0, le=60_000)
+    samples: int = Field(default=1, ge=1, le=100_000)
+    device_id: str | None = None
 
 
 class HandoverIn(BaseModel):
@@ -367,6 +376,84 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             )
         )
         return {"mission": runtime.missions.get(mission_id).to_dict(), "handover": payload}
+
+    # -- news / globe (SPEC §13) ---------------------------------------------------------------
+
+    @app.get("/news")
+    def news_list(
+        country: str | None = None,
+        topic: str | None = None,
+        limit: int = Query(50, ge=1, le=500),
+        forecasts: bool = True,
+    ) -> dict[str, Any]:
+        if runtime.news is None:
+            return {"enabled": False, "events": [], "count": 0}
+        events = runtime.news.store.recent(
+            limit=limit, country=country, topic=topic, include_forecasts=forecasts
+        )
+        return {"enabled": True, "count": len(events), "events": [e.to_dict() for e in events]}
+
+    @app.get("/news/countries")
+    def news_countries() -> dict[str, Any]:
+        from core.news import COUNTRIES
+
+        counts = runtime.news.store.by_country() if runtime.news else {}
+        return {
+            "enabled": runtime.news is not None,
+            "countries": [
+                {**vars(c), "aliases": None, "count": counts.get(iso, 0)}
+                for iso, c in COUNTRIES.items()
+            ],
+        }
+
+    @app.get("/news/{event_id}")
+    def news_get(event_id: str) -> dict[str, Any]:
+        ev = runtime.news.store.get(event_id) if runtime.news else None
+        if ev is None:
+            raise HTTPException(404, "news event not found")
+        return ev.to_dict()
+
+    @app.post("/news/refresh")
+    async def news_refresh(who: CallerDep) -> dict[str, Any]:
+        if runtime.news is None:
+            raise HTTPException(409, "news is disabled (JARVIS_NEWS=off)")
+        res = await runtime.executor.run(
+            "news.refresh",
+            {},
+            actor=f"owner:{who.device_id('api') or 'api'}",
+            correlation_id="news",
+            device_id=who.device_id(None),
+            device_trusted=who.effective_trust(True),
+        )
+        if not res.invocation.ok:
+            raise HTTPException(502, res.invocation.error or "refresh failed")
+        return res.invocation.result or {}
+
+    @app.post("/telemetry")
+    async def telemetry(body: TelemetryIn, who: CallerDep) -> dict[str, Any]:
+        """HUD frame/input timings (PERFORMANCE.md §5) - persisted like every other measurement."""
+        budget = {
+            "hud_frame": 16.7,
+            "globe_frame": 16.7,
+            "hud_input": 100.0,
+            "hud_mode_switch": 300.0,
+        }[body.point]
+        await runtime.bus.publish(
+            Event.new(
+                "telemetry.latency",
+                "hud",
+                {
+                    "point": body.point,
+                    "ms": round(body.ms, 2),
+                    "samples": body.samples,
+                    "budget_ms": budget,
+                    "within_budget": body.ms <= budget,
+                },
+                correlation_id="telemetry",
+                device_id=who.device_id(body.device_id),
+            )
+        )
+        return {"ok": True, "within_budget": body.ms <= budget}
 
     @app.get("/notifications")
     def notifications(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:

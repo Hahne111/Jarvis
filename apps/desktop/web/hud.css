@@ -83,3 +83,17 @@ body[data-state=halted] .ring{animation-play-state:paused;border-color:#5a2a2a}
   button,.chip,.dev,.tabs button{min-height:36px;padding:6px 10px;font-size:12px} .cmd{flex-wrap:wrap} .cmd #cmdInput{flex:1 1 100%;min-height:40px;font-size:16px} input,select{font-size:16px}
   .card .row button{flex:1 1 30%} .latency{display:none} .home{max-width:none}
 }
+/* scene manager (SPEC §3.2): body[data-mode] picks the adaptive layout; transitions stay cheap (opacity/transform) */
+.modes{display:flex;gap:4px;margin-left:12px} .modes button{padding:4px 10px;font-size:11px} .modes button.active{border-color:var(--amber);color:var(--amber)}
+.panel,.core-panel{transition:opacity .25s ease,transform .25s ease} .panel[hidden]{display:none}
+body[data-mode=globe] .panel.globe{display:flex;grid-column:2/4;grid-row:1/3} body[data-mode=globe] .panel.approvals,body[data-mode=globe] .panel.rail,body[data-mode=globe] .panel.missions,body[data-mode=globe] .panel.memory{display:none}
+body[data-mode=globe] .panel.coding{display:none} body[data-mode=globe] .panel.rail{display:flex;grid-column:2/4;grid-row:3/4}
+body[data-mode=coding] .panel.coding{grid-column:2/4;grid-row:1/4} body[data-mode=coding] .panel.approvals,body[data-mode=coding] .panel.rail,body[data-mode=coding] .panel.missions,body[data-mode=coding] .panel.memory{display:none}
+body[data-mode=mission] .panel.coding{display:none} body[data-mode=mission] .panel.missions{grid-column:2/4;grid-row:1/3} body[data-mode=mission] .panel.approvals{grid-column:2/3;grid-row:3/4} body[data-mode=mission] .panel.rail{grid-column:3/4;grid-row:3/4} body[data-mode=mission] .panel.memory{display:none}
+/* globe panel */
+.globe-body{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;min-height:0;flex:1} #globeCanvas{width:100%;height:100%;min-height:260px;border:1px solid var(--line);border-radius:6px;background:radial-gradient(600px 400px at 50% 40%,#0c1a26,#070a0f);cursor:grab;touch-action:none}
+.globe-side{display:flex;flex-direction:column;min-height:0;gap:6px} .globe-head{font:700 11px var(--sans);letter-spacing:.16em;color:var(--muted)} .cards{flex:2;overflow:auto} .evidence{flex:1;overflow:auto;border-top:1px solid var(--line);padding-top:4px}
+.card.news{border-color:#1e3242} .card.news .t{color:var(--text);font:600 13px var(--sans)} .card.news .m{color:var(--muted);font-size:11px;margin-top:2px} .card.news .conf{height:3px;background:#142230;border-radius:2px;margin-top:6px} .card.news .conf i{display:block;height:3px;background:var(--cyan);border-radius:2px}
+.badge{border:1px solid var(--amber-dim);color:var(--amber);border-radius:3px;padding:0 5px;font-size:10px;margin-left:6px} .badge.forecast{border-color:#3a4a5a;color:var(--muted)} .badge.breaking{border-color:var(--red);color:var(--red)}
+.evidence .src{display:flex;gap:8px;padding:2px 0;border-bottom:1px dotted #142230;font-size:11px} .evidence .src .q{color:var(--green);min-width:38px} .evidence .src a{color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:760px){.modes{margin-left:auto} .globe-body{grid-template-columns:1fr;grid-template-rows:260px 1fr} body[data-mode=globe] .panel.globe{order:1}}

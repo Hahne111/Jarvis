@@ -102,6 +102,43 @@ _WAKE_ALIASES = {
     "computer": "desktop",
     "workstation": "desktop",
 }
+_NEWS = (
+    re.compile(  # "news", "nachrichten", "what's important today", "news germany", "news about ai"
+        r"^\s*((what'?s|was ist|what is)\s+(heute\s+)?(weltweit\s+)?(important|wichtig|los)"
+        r"(\s+(today|heute|in the world|weltweit))?"
+        r"|(show\s+(me\s+)?|zeig(e)?\s+(mir\s+)?)?(the\s+|die\s+)?"
+        r"(news|nachrichten|world news|weltnachrichten|schlagzeilen|headlines))"
+        r"(\s+(about|über|ueber|zu|on)\s+(?P<topic>[a-zäöü ]{2,30}))?"
+        r"(\s+(from|aus|in|for|für)\s+(?P<country>[a-zäöüß .-]{2,40}))?\s*[?.!]?\s*$",
+        re.I,
+    )
+)
+_TOPIC_WORDS = {
+    "ai": "ai",
+    "ki": "ai",
+    "artificial intelligence": "ai",
+    "künstliche intelligenz": "ai",
+    "tech": "tech",
+    "technology": "tech",
+    "technologie": "tech",
+    "technik": "tech",
+    "politics": "politics",
+    "politik": "politics",
+    "economy": "economy",
+    "wirtschaft": "economy",
+    "security": "security",
+    "sicherheit": "security",
+    "war": "security",
+    "krieg": "security",
+    "climate": "climate",
+    "klima": "climate",
+    "health": "health",
+    "gesundheit": "health",
+    "science": "science",
+    "wissenschaft": "science",
+    "sports": "sports",
+    "sport": "sports",
+}
 _WINDOWS = re.compile(
     r"^\s*(list|show|zeige?)( the| die| alle)?( open| offenen)? (windows|fenster)\s*[?.]?\s*$", re.I
 )
@@ -130,6 +167,16 @@ class IntentRouter:
             )
         if (home := self._home_intent(text)) is not None:
             return home
+        if (m := _NEWS.match(text)) and "news.top" in self._caps:
+            args: dict[str, Any] = {}
+            topic = (m.group("topic") or "").strip().lower()
+            if topic in _TOPIC_WORDS:
+                args["topic"] = _TOPIC_WORDS[topic]
+            elif topic:
+                args["country"] = topic  # "news about germany"
+            if m.group("country"):
+                args["country"] = m.group("country").strip()
+            return Intent("capability", "news.top", args, text=text)
         if _WINDOWS.match(text) and "computer.list_windows" in self._caps:
             return Intent("capability", "computer.list_windows", {}, text=text)
         if (m := _OPEN_APP.match(text)) and "computer.open_app" in self._caps:

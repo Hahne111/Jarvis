@@ -1,4 +1,5 @@
 // JARVIS HUD client (ADR-0003). Renders only persisted Core events (docs/HUD_EVENTS.md).
+import { Globe } from "/hud/globe.js";
 // Fluidity: events are batched per animation frame; no synchronous work in the render path;
 // the websocket reconnects from the last seen seq; /health is polled at most every 5 s.
 
@@ -142,8 +143,84 @@ function ingest(e) {
   if (e.type.startsWith("device.")) devices.queue();
   if (CODING_TYPES.some((t) => e.type.startsWith(t))) coding.onEvent(e);
   if (e.type.startsWith("home.") || e.type === "power.wake.sent") home.queue();
+  if (e.type.startsWith("news.")) globeUI.queue();
+  if (e.type === "command.received" && (e.payload.intent || {}).capability === "news.top") scene.set("globe", "news command");
   scheduleRender();
 }
+
+// -------- scene manager (SPEC §3.2, Phase 10 step 63/67) ----------------------------------------------
+// One active mode; panels adapt via body[data-mode]. Switches are driven by the owner (nav) or by
+// real events (a news command opens the globe) - never by invented states. Mode switch time is
+// measured and reported as telemetry (hud_mode_switch).
+const scene = {
+  mode: "core",
+  set(mode, reason = "nav") {
+    if (mode === this.mode) return;
+    const t0 = performance.now();
+    this.mode = mode; document.body.dataset.mode = mode;
+    for (const b of $("modes").children) b.classList.toggle("active", b.dataset.mode === mode);
+    $("globePanel").hidden = mode !== "globe";
+    if (mode === "globe") globeUI.enter(); else globeUI.leave();
+    requestAnimationFrame(() => telemetry.post("hud_mode_switch", performance.now() - t0, 1));
+    try { localStorage.setItem("jarvis.mode", mode); } catch {}
+  },
+};
+$("modes").addEventListener("click", (e) => { const b = e.target.closest("button[data-mode]"); if (b) scene.set(b.dataset.mode); });
+const telemetry = {
+  async post(point, ms, samples) { try { await api("/telemetry", { method: "POST", body: JSON.stringify({ point, ms: Math.round(ms * 100) / 100, samples, device_id: "hud" }) }); } catch {} },
+};
+// HUD frame time (rAF cadence) - sampled cheaply, reported every 10 s as hud_frame p95
+(() => {
+  let last = performance.now(), samples = [], lastReport = last;
+  const tick = (t) => { const dt = t - last; last = t; if (dt < 1000) samples.push(dt); if (t - lastReport > 10000 && samples.length > 30) { const s = samples.slice().sort((a, b) => a - b); telemetry.post("hud_frame", s[Math.ceil(0.95 * s.length) - 1], s.length); samples = []; lastReport = t; } requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+})();
+
+// -------- world intelligence globe (SPEC §13) -----------------------------------------------------------
+const globeUI = {
+  globe: null, timer: null, country: null, topic: "", countries: [], events: [],
+  ensure() {
+    if (this.globe) return this.globe;
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    this.globe = new Globe($("globeCanvas"), {
+      reducedMotion: reduced,
+      onSelect: (iso) => this.select(iso),
+      onTelemetry: (t) => { telemetry.post(t.point, t.ms, t.samples); $("globeInfo").textContent = `${t.tier} tier · p95 ${t.ms} ms`; },
+    });
+    window.jarvisGlobe = this.globe; // read-only handle for diagnostics/tests (no state lives here)
+    return this.globe;
+  },
+  enter() { this.ensure().start(); this.refresh(); },
+  leave() { if (this.globe) this.globe.stop(); },
+  queue() { if (!this.timer) this.timer = setTimeout(() => { this.timer = null; if (scene.mode === "globe") this.refresh(); }, 300); },
+  async refresh() {
+    const [c, n] = await Promise.all([api("/news/countries"), api(`/news?limit=300${this.topic ? `&topic=${this.topic}` : ""}`)]).catch(() => [null, null]);
+    if (!c || !n) return;
+    this.events = n.events; this.countries = c.countries;
+    const counts = new Map(); for (const e of this.events) if (e.country) counts.set(e.country, (counts.get(e.country) || 0) + 1);
+    const list = this.countries.map((x) => ({ ...x, count: counts.get(x.iso) || 0 }));
+    this.ensure().setCountries(list); this.globe.setEvents(this.events);
+    if (!n.enabled) $("countryTitle").textContent = "News is disabled (JARVIS_NEWS=off).";
+    else if (!this.country) $("countryTitle").textContent = `${n.count} events · ${counts.size} countries · click a marker`;
+    if (this.country) this.renderCountry();
+  },
+  select(iso) { this.country = iso; this.globe.select(iso); this.renderCountry(); },
+  renderCountry() {
+    const c = this.countries.find((x) => x.iso === this.country);
+    const evs = this.events.filter((e) => e.country === this.country);
+    $("countryTitle").textContent = c ? `${c.name.toUpperCase()} · ${c.region} · ${evs.length} events` : "";
+    $("countryCards").innerHTML = evs.length ? evs.map((e) => `<div class="card news" data-ev="${e.event_id}"><div class="t">${esc(e.title)}${e.breaking ? '<span class="badge breaking">provisional</span>' : ""}${e.forecast ? '<span class="badge forecast">forecast</span>' : ""}</div>
+      <div class="m">${esc(e.summary).slice(0, 220)}</div><div class="m">${e.topics.map(esc).join(" · ")} · ${e.source_count} source${e.source_count === 1 ? "" : "s"} · confidence ${Math.round(e.confidence * 100)}% · ${fmtTime(e.published_at)}</div>
+      <div class="conf"><i style="width:${Math.round(e.confidence * 100)}%"></i></div></div>`).join("") : `<div class="empty">No events for this country.</div>`;
+    this.renderEvidence(evs[0]);
+  },
+  renderEvidence(e) {
+    $("evidenceRail").innerHTML = e ? e.sources.map((s) => `<div class="src"><span class="q">q ${Math.round(s.quality * 100)}%</span><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.name)}</a><span class="muted">${fmtTime(s.published_at)}</span></div>`).join("") + (e.breaking ? `<div class="muted">Single fresh source: treated as provisional until corroborated.</div>` : "") : `<div class="empty">Evidence appears per story.</div>`;
+  },
+};
+$("countryCards").addEventListener("click", (e) => { const c = e.target.closest("[data-ev]"); if (c) globeUI.renderEvidence(globeUI.events.find((x) => x.event_id === c.dataset.ev)); });
+$("globeTopic").addEventListener("change", (e) => { globeUI.topic = e.target.value; globeUI.refresh(); });
+$("newsRefreshBtn").addEventListener("click", async () => { $("globeInfo").textContent = "refreshing…"; try { const r = await api("/news/refresh", { method: "POST" }); $("globeInfo").textContent = `+${r.created} new · ${r.updated} updated`; } catch (err) { $("globeInfo").textContent = String(err.message || err).slice(0, 60); } });
 
 // -------- devices (SPEC §10 device mesh) ------------------------------------------------------------
 // Enrolled devices come from GET /devices; ENROLL mints a one-time code (shown once, never in an
@@ -423,4 +500,4 @@ $("railFilter").addEventListener("change", (e) => { state.filter = e.target.valu
 $("memQuery").addEventListener("input", queueRefresh);
 
 // -------- boot ------------------------------------------------------------------------------
-deviceAuth.load().then(() => { connect(); refreshHealth(); refreshLists(); coding.refresh(); home.refresh(); devices.refresh(); editor.boot(); setInterval(refreshHealth, 5000); });
+deviceAuth.load().then(() => { connect(); refreshHealth(); refreshLists(); coding.refresh(); home.refresh(); devices.refresh(); editor.boot(); setInterval(refreshHealth, 5000); let m = "core"; try { m = localStorage.getItem("jarvis.mode") || "core"; } catch {} if (m !== "core") scene.set(m, "restore"); });

@@ -16,6 +16,10 @@
 <header class="bar">
   <div class="brand">J.A.R.V.I.S. <span class="ver" id="version"></span></div>
   <div class="status" id="status">connecting…</div>
+  <nav class="modes" id="modes" aria-label="HUD mode">
+    <button data-mode="core" class="active">CORE</button><button data-mode="globe">GLOBE</button>
+    <button data-mode="coding">CODING</button><button data-mode="mission">MISSION</button>
+  </nav>
   <div class="actions">
     <button id="killBtn" class="danger" title="Stop everything">KILL SWITCH</button>
     <button id="resumeBtn" title="Resume with passkey proof">RESUME</button>
@@ -80,6 +84,23 @@
   <section class="panel memory">
     <h2>WHAT JARVIS KNOWS <input id="memQuery" placeholder="search…" aria-label="Search memory"></h2>
     <div id="memory" class="list"></div>
+  </section>
+
+  <section class="panel globe" id="globePanel" hidden>
+    <h2>WORLD INTELLIGENCE
+      <select id="globeTopic" aria-label="Topic layer"><option value="">all topics</option><option value="ai">ai</option><option value="tech">tech</option><option value="politics">politics</option><option value="economy">economy</option><option value="security">security</option><option value="climate">climate</option><option value="health">health</option><option value="science">science</option><option value="sports">sports</option></select>
+      <span id="globeInfo" class="info"></span>
+      <button id="newsRefreshBtn" class="primary" title="news.refresh through the gate">REFRESH</button>
+    </h2>
+    <div class="globe-body">
+      <canvas id="globeCanvas" aria-label="World globe"></canvas>
+      <div class="globe-side">
+        <div class="globe-head" id="countryTitle">Select a country or wait for the globe to turn.</div>
+        <div id="countryCards" class="list cards"></div>
+        <div class="globe-head">EVIDENCE</div>
+        <div id="evidenceRail" class="list evidence"></div>
+      </div>
+    </div>
   </section>
 
   <section class="panel coding" id="codingPanel">
