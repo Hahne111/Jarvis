@@ -1,8 +1,10 @@
 """Device registry: durable device records + single-use enrollment codes (Phase 9 step 58).
 
-The table shares the Core engine (like missions/memory). Enrollment codes live in memory: they
-are short-lived (10 min), single-use, and the owner mints them from an already trusted place
-(the local HUD or a signed trusted device). The code itself never appears in an event.
+Both tables share the Core engine (like missions/memory), so a code minted from the terminal
+(``python -m core enroll``) works against the running Core. Codes are short-lived (10 min),
+single-use, closed after 5 wrong attempts, and the owner mints them from an already trusted
+place (loopback HUD, CLI on the machine, or a signed trusted device). The code itself never
+appears in an event.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, Text, select, update
+from sqlalchemy import Column, Integer, MetaData, String, Table, Text, delete, select, update
 from sqlalchemy.engine import Engine
 
 from core.devices.model import Device, DeviceType
@@ -32,6 +34,20 @@ devices_table = Table(
     Column("last_seen", String(40), nullable=True),
     Column("revoked_at", String(40), nullable=True),
     Column("revoked_reason", Text, nullable=True),
+)
+
+enrollments_table = Table(
+    "device_enrollments",
+    metadata,
+    Column("enrollment_id", String(36), primary_key=True),
+    Column("code", String(16), nullable=False),
+    Column("name_hint", String(120), nullable=False),
+    Column("type", String(16), nullable=False),
+    Column("trusted", Integer, nullable=False),
+    Column("created_by", String(120), nullable=False),
+    Column("expires_at", String(40), nullable=False),
+    Column("attempts", Integer, nullable=False),
+    Column("used", Integer, nullable=False),
 )
 
 ENROLLMENT_TTL_S = 600
@@ -68,12 +84,38 @@ class Enrollment:
             d["code"] = self.code
         return d
 
+    def to_row(self) -> dict[str, Any]:
+        return {
+            "enrollment_id": self.enrollment_id,
+            "code": self.code,
+            "name_hint": self.name_hint,
+            "type": self.type.value,
+            "trusted": 1 if self.trusted else 0,
+            "created_by": self.created_by,
+            "expires_at": self.expires_at.isoformat(),
+            "attempts": self.attempts,
+            "used": 1 if self.used else 0,
+        }
+
+    @classmethod
+    def from_row(cls, row: Any) -> Enrollment:
+        return cls(
+            enrollment_id=row.enrollment_id,
+            code=row.code,
+            name_hint=row.name_hint,
+            type=DeviceType(row.type),
+            trusted=bool(row.trusted),
+            created_by=row.created_by,
+            expires_at=datetime.fromisoformat(row.expires_at),
+            attempts=int(row.attempts),
+            used=bool(row.used),
+        )
+
 
 class DeviceRegistry:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
         metadata.create_all(engine)
-        self._enrollments: dict[str, Enrollment] = {}
 
     # -- devices -------------------------------------------------------------------------------
 
@@ -142,7 +184,7 @@ class DeviceRegistry:
                 )
         return self.get(device_id)  # type: ignore[return-value]
 
-    # -- enrollment ----------------------------------------------------------------------------
+    # -- enrollment (durable, shared with the CLI) --------------------------------------------
 
     def start_enrollment(
         self,
@@ -154,25 +196,27 @@ class DeviceRegistry:
     ) -> Enrollment:
         self._prune()
         e = Enrollment(name_hint=name_hint, type=type, trusted=trusted, created_by=created_by)
-        self._enrollments[e.enrollment_id] = e
+        with self._engine.begin() as conn:
+            conn.execute(enrollments_table.insert().values(**e.to_row()))
         return e
 
     def pending_enrollments(self) -> list[Enrollment]:
         self._prune()
-        return [e for e in self._enrollments.values() if not e.used]
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(enrollments_table).where(enrollments_table.c.used == 0)
+            ).all()
+        return [Enrollment.from_row(r) for r in rows]
 
     def complete_enrollment(self, code: str, *, name: str, public_key: str) -> Device:
         self._prune()
-        now = datetime.now(UTC)
         code = (code or "").strip().upper()
-        match = next((e for e in self._enrollments.values() if not e.used), None)
-        for e in self._enrollments.values():
-            if e.used or e.expires_at <= now:
-                continue
+        open_ = self.pending_enrollments()
+        for e in open_:
             if secrets.compare_digest(e.code, code):
                 if self.by_public_key(public_key) is not None:
                     raise EnrollmentError("this key is already enrolled")
-                e.used = True
+                self._mark(e.enrollment_id, used=True)
                 device = Device(
                     name=name or e.name_hint or e.type.value,
                     type=e.type,
@@ -181,16 +225,33 @@ class DeviceRegistry:
                 )
                 return self.add(device)
         # wrong code: count against every open enrollment (brute force protection)
-        for e in self._enrollments.values():
-            if not e.used:
-                e.attempts += 1
-                if e.attempts >= ENROLLMENT_MAX_ATTEMPTS:
-                    e.used = True
-        if match is None:
+        for e in open_:
+            attempts = e.attempts + 1
+            self._mark(e.enrollment_id, attempts=attempts, used=attempts >= ENROLLMENT_MAX_ATTEMPTS)
+        if not open_:
             raise EnrollmentError("no enrollment is open")
         raise EnrollmentError("invalid or expired enrollment code")
 
+    def _mark(
+        self, enrollment_id: str, *, used: bool | None = None, attempts: int | None = None
+    ) -> None:
+        values: dict[str, Any] = {}
+        if used is not None:
+            values["used"] = 1 if used else 0
+        if attempts is not None:
+            values["attempts"] = attempts
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(enrollments_table)
+                .where(enrollments_table.c.enrollment_id == enrollment_id)
+                .values(**values)
+            )
+
     def _prune(self) -> None:
-        now = datetime.now(UTC)
-        for k in [k for k, e in self._enrollments.items() if e.used or e.expires_at <= now]:
-            self._enrollments.pop(k, None)
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                delete(enrollments_table).where(
+                    (enrollments_table.c.used == 1) | (enrollments_table.c.expires_at <= now)
+                )
+            )

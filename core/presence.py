@@ -39,6 +39,7 @@ _RELEVANT = frozenset(
         "agent.run.paused",
         "agent.run.resumed",
         "agent.run.finished",
+        "mission.handover",
         "permission.ask",
         "permission.approved",
         "permission.denied",
@@ -137,6 +138,23 @@ class PresenceService:
         elif t == "agent.run.resumed":
             dev.running_runs.add(ev.payload["run"]["run_id"])
             dev.state = PresenceState.WORKING
+        elif t == "mission.handover":
+            # the mission moves to the target device; the source lets go of it
+            src = self._devices.get(ev.payload.get("from_device") or "")
+            if src is not None and src.active_mission == ev.correlation_id:
+                src.active_mission = None
+                if src.state in (PresenceState.WORKING, PresenceState.AWAITING_APPROVAL):
+                    src.state = PresenceState.IDLE
+            dev = self._devices.setdefault(
+                ev.payload["to_device"], DevicePresence(ev.payload["to_device"])
+            )
+            before = dev.state
+            dev.active_mission = ev.correlation_id
+            status = ev.payload.get("status")
+            if status == "waiting_for_approval":
+                dev.state = PresenceState.AWAITING_APPROVAL
+            elif status in ("running", "planning", "verifying"):
+                dev.state = PresenceState.WORKING
         elif t == "agent.run.finished":
             dev.running_runs.discard(ev.payload["run"]["run_id"])
             if not dev.running_runs and dev.state is PresenceState.WORKING:

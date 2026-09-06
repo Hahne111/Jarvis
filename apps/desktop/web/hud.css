@@ -72,3 +72,14 @@ body[data-state=halted] .ring{animation-play-state:paused;border-color:#5a2a2a}
 .dev-row .trusted{color:var(--green)} .dev-row .untrusted{color:var(--amber)} .dev-row .revoked{color:var(--red);text-decoration:line-through} .dev-row button{padding:1px 6px;font-size:10px}
 .enroll-code{border:1px solid var(--amber-dim);border-radius:4px;padding:8px;margin:6px 0;background:#0a1016;color:var(--amber);font:16px var(--mono);letter-spacing:.2em}
 .enroll-code small{display:block;color:var(--muted);letter-spacing:0;font:11px var(--mono);margin-top:4px}
+/* this device: browser-held Ed25519 key (WebCrypto, IndexedDB); enrollment needs https or localhost */
+.this-device{display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:6px;margin-top:6px;font:11px var(--mono)} .this-device input{width:110px;font-size:12px;padding:3px 6px} .this-device button{padding:3px 8px;font-size:11px}
+/* mobile (Phase 9 step 57): one column, touch targets, the core first, panels stacked; PWA standalone */
+@media (max-width:760px){
+  html,body{height:auto} body{overflow:visible} .bar{position:sticky;top:0;z-index:2;height:44px;gap:8px;padding:0 10px} .panel,.panel h2,.core-panel{scroll-margin-top:52px} .brand{font-size:14px;letter-spacing:.12em} .status{display:none}
+  .grid{display:flex;flex-direction:column;gap:10px;padding:10px;height:auto} .core-panel{order:0;padding:10px;gap:10px} .core{width:min(48vw,200px);height:min(48vw,200px)}
+  .panel.approvals{order:1} .panel.missions{order:2} .panel.rail{order:5;max-height:40vh} .panel.memory{order:4} .panel.coding{order:6;grid-column:auto} .panel{min-height:120px;max-height:60vh}
+  .coding-body{grid-template-columns:1fr;grid-template-rows:120px 1fr} .rooms{grid-template-columns:1fr;max-height:40vh}
+  button,.chip,.dev,.tabs button{min-height:36px;padding:6px 10px;font-size:12px} .cmd{flex-wrap:wrap} .cmd #cmdInput{flex:1 1 100%;min-height:40px;font-size:16px} input,select{font-size:16px}
+  .card .row button{flex:1 1 30%} .latency{display:none} .home{max-width:none}
+}

@@ -50,6 +50,7 @@ from core.models import (
     ModelSpec,
     Tier,
 )
+from core.notify import PushService, PushTransport, push_transport_from_env
 from core.permissions import PermissionEngine, Policy
 from core.presence import PresenceService
 from core.verifier import (
@@ -86,6 +87,7 @@ class CoreRuntime:
     wol: WolService | None
     devices: DeviceRegistry
     auth: DeviceAuthenticator
+    notify: PushService | None
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -104,6 +106,7 @@ class CoreRuntime:
         workspace_root: str | None = None,
         home: HomeBackend | str | None = None,
         wol: WolService | None = None,
+        push: PushTransport | str | None = None,
     ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
@@ -145,6 +148,12 @@ class CoreRuntime:
         presence = PresenceService(bus)
         devices = DeviceRegistry(store.engine)
         auth = DeviceAuthenticator(devices)
+        transport = (
+            push
+            if (push is not None and not isinstance(push, str))
+            else push_transport_from_env(push)
+        )
+        notify = PushService(bus, transport) if transport is not None else None
         coordinator = AgentCoordinator(
             bus=bus,
             executor=executor,
@@ -177,6 +186,7 @@ class CoreRuntime:
             wol=wol_service,
             devices=devices,
             auth=auth,
+            notify=notify,
             db_url=url,
         )
 
@@ -217,6 +227,7 @@ class CoreRuntime:
             "presence": self.presence.snapshot(),
             "home": self.home.states.current.value if self.home else None,
             "devices": self.devices.count(),
+            "push": self.notify.transport.name if self.notify else None,
             "capabilities": self.capabilities.health(),
         }
 

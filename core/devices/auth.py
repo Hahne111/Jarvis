@@ -33,6 +33,9 @@ HDR_NONCE = "x-jarvis-nonce"
 HDR_SIG = "x-jarvis-signature"
 MAX_SKEW_S = 120
 LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+FORWARDED_HEADERS = frozenset(
+    {"x-forwarded-for", "x-real-ip", "forwarded", "tailscale-user-login", "x-forwarded-host"}
+)
 
 
 class AuthError(Exception):
@@ -171,7 +174,10 @@ class DeviceAuthenticator:
         self, headers: dict[str, str], method: str, path: str, body: bytes, client_host: str | None
     ) -> Caller:
         h = {k.lower(): v for k, v in headers.items()}
-        local = (client_host or "") in LOCAL_HOSTS
+        # Behind a reverse proxy / tunnel (e.g. `tailscale serve`) the TCP peer is loopback but
+        # the caller is not: any forwarding header removes the local-owner privilege.
+        forwarded = any(k in h for k in FORWARDED_HEADERS)
+        local = (client_host or "") in LOCAL_HOSTS and not forwarded
         device_id = h.get(HDR_DEVICE)
         if not device_id:
             return Caller(local=local, client_host=client_host)

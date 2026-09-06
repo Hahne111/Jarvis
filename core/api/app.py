@@ -11,6 +11,8 @@ Endpoints
     POST /approvals/{decision_id}/deny {reason?}
     POST /kill, POST /resume {method, device_id, device_trusted}
     GET  /devices, POST /devices/enroll/start, POST /devices/enroll, POST /devices/{id}/revoke|trust
+    POST /missions/{id}/handover {to_device_id}   move responsibility desktop <-> mobile
+    GET  /notifications                             push deliveries (notify.sent|failed)
     Signed requests (X-Jarvis-Device/Timestamp/Nonce/Signature) bind device_trusted to the
     registry; unsigned callers are trusted only from loopback (core/devices/auth.py, ADR-0004)
     GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -48,9 +51,9 @@ from core.api.commands import (
 )
 from core.capabilities import InvocationStatus
 from core.devices import AuthError, Caller, DeviceType, EnrollmentError, valid_public_key
-from core.events.envelope import Event
+from core.events.envelope import Event, Priority
 from core.memory import MemoryPolicyError, MemoryType
-from core.missions import MissionNotFound, MissionStatus
+from core.missions import InvalidTransition, MissionNotFound, MissionStatus
 from core.permissions import ApprovalError, ApprovalProof, PolicyViolation, ProofMethod
 from core.runtime import CoreRuntime
 
@@ -71,6 +74,7 @@ _PREVIEW_TYPES = {
     ".md": "text/plain",
 }
 _HUD = Path(__file__).resolve().parents[2] / "apps" / "desktop" / "web"
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 class CommandIn(BaseModel):
@@ -149,6 +153,11 @@ class RevokeIn(BaseModel):
 
 class TrustIn(BaseModel):
     trusted: bool
+
+
+class HandoverIn(BaseModel):
+    to_device_id: str = Field(min_length=1, max_length=120)
+    note: str | None = Field(default=None, max_length=200)
 
 
 class WorkspaceWriteIn(BaseModel):
@@ -318,6 +327,51 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             return runtime.missions.get(mission_id).to_dict()
         except MissionNotFound:
             raise HTTPException(404, "mission not found") from None
+
+    @app.post("/missions/{mission_id}/handover")
+    async def mission_handover(mission_id: str, body: HandoverIn, who: CallerDep) -> dict[str, Any]:
+        """Desktop <-> mobile handover (SPEC §10): the mission stays one object in the Core;
+        only the responsible device changes (visible in presence and the mission checkpoints)."""
+        owner_only(who)
+        try:
+            m = runtime.missions.get(mission_id)
+        except MissionNotFound:
+            raise HTTPException(404, "mission not found") from None
+        target = runtime.devices.get(body.to_device_id)
+        if target is not None and target.revoked:
+            raise HTTPException(409, "target device is revoked")
+        to_device = target.device_id if target else body.to_device_id
+        from_device = who.device_id(m.device_id)
+        payload = {
+            "from_device": from_device,
+            "to_device": to_device,
+            "status": m.status.value,
+            "note": body.note,
+            "by": who.device_id("local"),
+        }
+        try:
+            await runtime.missions.checkpoint(mission_id, {"handover": payload})
+        except InvalidTransition as exc:
+            raise HTTPException(409, str(exc)) from None
+        await runtime.bus.publish(
+            Event.new(
+                "mission.handover",
+                "core-api",
+                payload,
+                correlation_id=mission_id,
+                user_id=m.owner,
+                device_id=to_device,
+                priority=Priority.URGENT
+                if m.status is MissionStatus.WAITING_FOR_APPROVAL
+                else Priority.NORMAL,
+            )
+        )
+        return {"mission": runtime.missions.get(mission_id).to_dict(), "handover": payload}
+
+    @app.get("/notifications")
+    def notifications(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:
+        rows = runtime.store.replay(type_prefix="notify", limit=5000)
+        return [_row(seq, ev) for seq, ev in rows][-limit:]
 
     # -- approvals -----------------------------------------------------------------------------
 

@@ -10,11 +10,66 @@ const RAIL_MAX = 400;
 const area = (type) => type.split(".")[0];
 const short = (s) => (s || "").slice(0, 8);
 const fmtTime = (iso) => (iso || "").slice(11, 19);
-async function api(path, opts) {
-  const r = await fetch(path, { headers: { "content-type": "application/json" }, ...opts });
+async function api(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
+  const signed = await deviceAuth.headers(method, path.split("?")[0], opts.body || "");
+  const r = await fetch(path, { ...opts, headers: { "content-type": "application/json", ...signed, ...(opts.headers || {}) } });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
 }
+
+// -------- device identity (ADR-0004) ---------------------------------------------------------------
+// The browser holds a non-extractable Ed25519 key (WebCrypto -> IndexedDB). Once enrolled, every
+// request is signed and the Core derives trust from its registry; the key never leaves the device.
+const deviceAuth = {
+  me: null, // { id, name, publicKey (b64), keys: CryptoKeyPair }
+  available() { return !!(window.crypto && crypto.subtle) && window.isSecureContext; },
+  db() {
+    return new Promise((res, rej) => {
+      const q = indexedDB.open("jarvis-hud", 1);
+      q.onupgradeneeded = () => q.result.createObjectStore("device");
+      q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+    });
+  },
+  async load() {
+    try {
+      const db = await this.db();
+      this.me = await new Promise((res, rej) => { const t = db.transaction("device").objectStore("device").get("me"); t.onsuccess = () => res(t.result || null); t.onerror = () => rej(t.error); });
+    } catch { this.me = null; }
+    return this.me;
+  },
+  async save(me) {
+    const db = await this.db();
+    await new Promise((res, rej) => { const t = db.transaction("device", "readwrite").objectStore("device").put(me, "me"); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+    this.me = me;
+  },
+  async forget() {
+    const db = await this.db();
+    await new Promise((res) => { const t = db.transaction("device", "readwrite").objectStore("device").delete("me"); t.onsuccess = () => res(); t.onerror = () => res(); });
+    this.me = null;
+  },
+  async enroll(code, name) {
+    if (!this.available()) throw new Error("WebCrypto needs a secure context: HTTPS (tailscale serve) or localhost");
+    const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const pub = b64(await crypto.subtle.exportKey("raw", keys.publicKey));
+    const r = await fetch("/devices/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name, public_key: pub }) });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const dev = await r.json();
+    await this.save({ id: dev.device_id, name: dev.name, fingerprint: dev.fingerprint, publicKey: pub, keys });
+    return dev;
+  },
+  async headers(method, path, body) {
+    if (!this.me || !this.available()) return {};
+    const ts = String(Math.floor(Date.now() / 1000));
+    const nonce = b64(crypto.getRandomValues(new Uint8Array(12))).replace(/[+/=]/g, "");
+    const digest = hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body || "")));
+    const msg = new TextEncoder().encode(`${ts}\n${nonce}\n${method}\n${path}\n${digest}`);
+    const sig = await crypto.subtle.sign("Ed25519", this.me.keys.privateKey, msg);
+    return { "x-jarvis-device": this.me.id, "x-jarvis-timestamp": ts, "x-jarvis-nonce": nonce, "x-jarvis-signature": b64(sig) };
+  },
+};
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const hex = (buf) => [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 const proof = (method) => ({ method, device_id: "hud", device_trusted: true, reference: "hud" });
 
 // -------- render (called from rAF only) ------------------------------------------------------
@@ -104,10 +159,21 @@ const devices = {
       <span class="${x.revoked_at ? "revoked" : x.trusted ? "trusted" : "untrusted"}">${x.revoked_at ? "revoked" : x.trusted ? "trusted" : "untrusted"}</span>
       ${x.revoked_at ? "" : `<button data-trust="${x.device_id}" data-to="${!x.trusted}">${x.trusted ? "untrust" : "trust"}</button><button class="danger" data-revoke="${x.device_id}">revoke</button>`}</div>`);
     const pending = d.pending_enrollments.map((e) => `<div class="dev-row muted"><span class="t">pending</span><span class="n">${esc(e.name_hint || e.type)} · until ${fmtTime(e.expires_at)}</span></div>`);
-    const code = this.code ? `<div class="enroll-code">${this.code.code}<small>enrollment code · valid until ${fmtTime(this.code.expires_at)} · enter it on the new device (POST /devices/enroll)</small></div>` : "";
-    $("devices").innerHTML = code + (rows.length || pending.length ? rows.join("") + pending.join("") : `<div class="empty">No devices enrolled. This HUD is the local owner.</div>`);
+    const code = this.code ? `<div class="enroll-code">${this.code.code}<small>enrollment code · valid until ${fmtTime(this.code.expires_at)} · enter it on the new device (DEVICES → enroll this device)</small></div>` : "";
+    $("devices").innerHTML = code + (rows.length || pending.length ? rows.join("") + pending.join("") : `<div class="empty">No devices enrolled. ${d.caller.local ? "This HUD is the local owner." : "This HUD is untrusted until enrolled."}</div>`);
+    const me = deviceAuth.me;
+    $("thisDeviceInfo").textContent = me ? `this device: ${me.name} · ${me.fingerprint} · signed requests` : deviceAuth.available() ? "this device is not enrolled" : "enrollment needs a secure context (HTTPS or localhost)";
+    $("enrollCode").hidden = $("enrollName").hidden = $("enrollThisBtn").hidden = !!me || !deviceAuth.available();
+    $("forgetKeyBtn").hidden = !me;
   },
 };
+$("thisDevice").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await deviceAuth.enroll($("enrollCode").value.trim(), $("enrollName").value.trim() || "device"); $("enrollCode").value = ""; }
+  catch (err) { alert(err.message || err); }
+  devices.refresh(); refreshLists();
+});
+$("forgetKeyBtn").addEventListener("click", async () => { await deviceAuth.forget(); devices.refresh(); });
 $("enrollBtn").addEventListener("click", async () => {
   const name_hint = prompt("Name of the new device (e.g. phone):", "phone"); if (name_hint === null) return;
   devices.code = await api("/devices/enroll/start", { method: "POST", body: JSON.stringify({ name_hint, type: "mobile", trusted: true }) }).catch((e) => { alert(e); return null; });
@@ -123,7 +189,7 @@ $("missionTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   for (const x of $("missionTabs").children) x.classList.toggle("active", x === b);
   for (const el of document.querySelectorAll(".missions [data-tab]")) el.hidden = el.dataset.tab !== b.dataset.tab;
-  if (b.dataset.tab === "devices") devices.refresh();
+  if (b.dataset.tab === "devices") { $("thisDevice").hidden = false; devices.refresh(); } else $("thisDevice").hidden = true;
 });
 
 // -------- home (SPEC §11) ---------------------------------------------------------------------------
@@ -357,4 +423,4 @@ $("railFilter").addEventListener("change", (e) => { state.filter = e.target.valu
 $("memQuery").addEventListener("input", queueRefresh);
 
 // -------- boot ------------------------------------------------------------------------------
-connect(); refreshHealth(); refreshLists(); coding.refresh(); home.refresh(); editor.boot(); setInterval(refreshHealth, 5000);
+deviceAuth.load().then(() => { connect(); refreshHealth(); refreshLists(); coding.refresh(); home.refresh(); devices.refresh(); editor.boot(); setInterval(refreshHealth, 5000); });

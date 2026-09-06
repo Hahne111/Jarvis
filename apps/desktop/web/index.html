@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>J.A.R.V.I.S.</title>
 <link rel="icon" href="data:,">
+<link rel="manifest" href="/hud/manifest.webmanifest">
+<meta name="theme-color" content="#0c121a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
 <link rel="stylesheet" href="/hud/hud.css">
 </head>
 <body data-state="idle">
@@ -63,6 +68,13 @@
       <button id="enrollBtn" class="primary" hidden title="Mint a one-time enrollment code for a new device">ENROLL</button></h2>
     <div id="missions" class="list" data-tab="missions"></div>
     <div id="devices" class="list" data-tab="devices" hidden></div>
+    <form id="thisDevice" class="this-device" data-tab="devices" hidden autocomplete="off">
+      <span id="thisDeviceInfo" class="muted">this device is not enrolled</span>
+      <input id="enrollCode" placeholder="code" maxlength="8" aria-label="Enrollment code">
+      <input id="enrollName" placeholder="device name" maxlength="60" aria-label="Device name">
+      <button type="submit" class="primary" id="enrollThisBtn">ENROLL THIS DEVICE</button>
+      <button type="button" id="forgetKeyBtn" hidden>forget key</button>
+    </form>
   </section>
 
   <section class="panel memory">
