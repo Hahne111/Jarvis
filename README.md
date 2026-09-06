@@ -1,16 +1,97 @@
-# J.A.R.V.I.S. — Local AI Voice Assistant
+# J.A.R.V.I.S.
 
-A fully local, agentic AI voice assistant with wake word detection, screen vision, desktop control, and an Iron Man-inspired web UI. Runs entirely on your machine — no cloud required.
+Persönlicher, lokal laufender KI-Assistent nach dem `JARVIS Master Blueprint 1.0` (`docs/`). Das Repo enthält zwei Teile:
 
-> Say **"Hey Jarvis"** → ask anything → Jarvis sees your screen, controls your apps, searches the web, and speaks back.
+| Teil | Was | Status |
+|------|-----|--------|
+| **JARVIS Core** (`core/`, `adapters/`, `voice/`, `apps/`, `skills/`) | Deterministischer Kern: Permission Engine (P0–P6) → Execution Gateway → Verifier → Event Bus; Missionen, Memory, Agents mit austauschbaren Modell-Providern, Desktop/Workspace/Home-Adapter, Web-HUD, Skill Factory, signierte Releases | **1.0.0rc1** – Blueprint-Phasen 0–12 umgesetzt (`docs/STATUS.md`) |
+| **Legacy-Prototyp** (`jarvis/`) | Ursprünglicher Voice-Prototyp (Wake → Whisper → LLM + Tools → Kokoro, Web-UI auf :7860) | unverändert (ADR-0001), wird capability-weise hinter den Core migriert |
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Windows | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-0078D6)
+![Windows | macOS | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D6)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
-## Features
+## JARVIS Core
+
+### Prinzipien
+
+- **Core ist das Produkt, Modelle sind austauschbar.** Provider (Claude, Mock, keiner) liefern Tool-Calls nur als Vorschlag; ausgeführt wird ausschließlich über das Execution Gateway nach Allowlist.
+- **Jede Seiteneffekt-Capability hat Risk Level und Verifier.** P0 beobachten … P3 Freigabe per Tap … P4 nur mit Passkey/Biometrie auf einem vertrauten Gerät … P6 wird nie ausgeführt. Die Policy kann sich nur verschärfen.
+- **Alles ist ein Event.** HUD und API zeigen nur persistierte Events; nach einem Neustart werden Missionen und offene Freigaben aus dem Event-Log wiederhergestellt.
+- **Kill Switch.** „Jarvis, stop“ oder `POST /kill` hält jeden Seiteneffekt an; Fortsetzen nur mit starkem Proof.
+- **Local-first, keine Secrets im Repo.** Tokens und Keys kommen nur aus der Umgebung; `secret`-Memory erreicht nie einen Cloud-Prompt oder ein Event.
+
+### Schnellstart
+
+```bash
+git clone https://github.com/Hahne111/Jarvis.git && cd Jarvis
+./install.sh                         # macOS/Linux (Windows: install.bat) – venv + Abhängigkeiten
+pip install -r core/requirements.txt # reicht, wenn nur der Core laufen soll (Python 3.12)
+
+JARVIS_PROVIDER=none JARVIS_HOME=fake JARVIS_NEWS=fake python -m core
+# HUD:   http://127.0.0.1:7870/hud/   Debug: http://127.0.0.1:7870/debug
+```
+
+Im HUD: „echo hello“, „what time is it“, „turn on the kitchen light“, „szene movie“, „wake desktop“ (wartet auf Freigabe), „Jarvis, stop“.
+
+| Schalter | Werte | Zweck |
+|----------|-------|-------|
+| `JARVIS_PROVIDER` | `claude` (Default, braucht `pip install anthropic` + Key) · `mock` · `none` | Modell-Provider für Agent-Missionen |
+| `JARVIS_DESKTOP` | `off` · `fake` · `prototype` | Desktop-Capabilities (echter PC über den Prototyp-Toolstack) |
+| `JARVIS_HOME` | `off` · `fake` · `homeassistant` (`JARVIS_HA_URL`, `JARVIS_HA_TOKEN`) | Home Core, Szenen, Lock/Alarm (P4) – `docs/HOME_ASSISTANT.md` |
+| `JARVIS_WOL_TARGETS` | JSON-Liste `[{"name","mac","host","port"}]` oder Pfad zu einer JSON-Datei | Wake-on-LAN (`power.wake`, P3) mit Erreichbarkeits-Verifier |
+| `JARVIS_NEWS` | `off` · `fake` · `rss` (`JARVIS_NEWS_FEEDS`) | World Intelligence Globe |
+| `JARVIS_PUSH` | `off` · `fake` · `webhook` | Push-Benachrichtigungen aufs Handy – `docs/REMOTE.md` |
+| `JARVIS_CORE_HOST` | Mesh-IP (nie `0.0.0.0`) | Remote-Zugriff nur signiert; Enrollment `python -m core enroll phone` |
+| `JARVIS_SCHEDULER` | `on` (Default) | Geplante Jobs, Watchdog, Daily Brief |
+
+Voice-Loop gegen den Core: `python -m voice` (Mikrofon) oder `JARVIS_VOICE_FAKE=1 python -m voice` (Tastatur). Alle Variablen mit Platzhaltern in `.env.example`.
+
+### Was der Core kann (Phasen 0–12)
+
+- **Missionen & Freigaben** – Text/Voice-Kommando → deterministischer Fast-Path oder Agent → Gateway → Verifier; Approvals im HUD oder am Handy, Handover einer Mission zwischen Geräten.
+- **Agents** – Router Fast/Smart/Deep, Budget, Subagent-Rollen (research/implementation/test/verification/security), Coding-Workflow in sandboxed Workspaces: eine Codeänderung gilt erst nach verifiziertem grünem Testlauf als erledigt.
+- **Memory („What JARVIS Knows“)** – typisierte Items mit Sensitivität, Korrektur als neue Version, Vergessen, Privacy-Modi normal/private/guest.
+- **Desktop, Workspace, Home** – Adapter mit Fake-Backends für Tests/CI und echten Backends (pyautogui-Prototyp, Home Assistant REST, WOL).
+- **HUD** – buildfreies Web-HUD (ES-Module), Coding-Modus mit lokal gebündeltem Monaco (nie CDN), Canvas-Globus für Nachrichten mit Quellen/Confidence, responsiv + PWA fürs Handy mit Gerätesignatur (Ed25519 im Browser).
+- **Proaktivität** – Scheduler mit Watchdog, Relevance-Gate für Push, Gewohnheits-Vorschläge (nie automatisch aktiv), Daily Brief.
+- **Skill Factory** – Skill-SDK, statischer AST-Review (kein OS/Netz/Datei/Core-Zugriff), Sandbox-Tests, versionierte Installation mit Rollback; Install nur nach Owner-Freigabe.
+- **Release 1.0** – Ed25519-signierte Archive (`.github/workflows/release.yml`), Updater mit Smoke-Test und Offline-Rollback, verschlüsseltes Backup (scrypt + AES-256-GCM), Regression-Suite mit Golden Scenarios – `docs/RELEASE.md`.
+
+### Tests, Lint, CI
+
+```bash
+pytest -q                    # alles (Linux headless: xvfb-run -a pytest -q)
+pytest -q tests/core         # Core (nur core/requirements.txt, Python 3.12)
+pytest -q tests/regression   # Release/Updater/Backup, Security-Invarianten, Performance-Budgets, Golden Scenarios
+ruff format --check . && ruff check .
+```
+
+CI (`.github/workflows/ci.yml`): Format + Lint, Secret-Scan (gitleaks), Unit-Tests 3.11, Core-Tests 3.12, Regression-Suite, Build-Smoke. `main` ist geschützt; Änderungen gehen über Feature-Branch → PR → grüne CI.
+
+### Dokumentation
+
+| Datei | Inhalt |
+|-------|--------|
+| `docs/SPEC.md` | Blueprint kompakt (Source of Truth: `docs/JARVIS_Master_Blueprint_1.0.pdf`) |
+| `docs/SECURITY.md` / `docs/PERFORMANCE.md` | Normative Security-Regeln, Latenz-Budgets |
+| `docs/STATUS.md` | Aktueller Stand, letzter Milestone, nächster Schritt |
+| `docs/HUD_EVENTS.md` | Event-Vertrag zwischen Core und HUD |
+| `docs/HOME_ASSISTANT.md` · `docs/REMOTE.md` · `docs/RELEASE.md` | Home-Anbindung, Remote/Mobile-Setup, Install/Update/Rollback/Backup |
+| `docs/decisions/` | ADRs (Deltas zur PDF) |
+| `CLAUDE.md` | Entwicklungsregeln und Repo-Layout |
+
+---
+
+## Legacy-Prototyp (`jarvis/`)
+
+Der ursprüngliche Voice-Prototyp bleibt unverändert lauffähig (Web-UI auf **http://localhost:7860**) und führt seine Tools noch ohne Permission Engine/Verifier aus (dokumentiert in `docs/SECURITY.md` §8, ADR-0001). Die folgenden Abschnitte beschreiben ihn.
+
+> Say **"Hey Jarvis"** → ask anything → Jarvis sees your screen, controls your apps, searches the web, and speaks back.
+
+### Features
 
 - **Voice-first interaction** — wake word detection ("Hey Jarvis"), natural speech input, streaming TTS responses
 - **32 built-in tools** — desktop automation, screen reading (OCR), app control, web search, file ops, system commands
@@ -23,22 +104,20 @@ A fully local, agentic AI voice assistant with wake word detection, screen visio
 - **One-click install** — `install.bat` / `install.sh` sets up everything, `start.bat` / `start.sh` launches
 
 ---
-Coffe helps: https://buymeacoffee.com/azzren
----
 
-## Quick Start
+### Quick Start
 
-### Prerequisites
+#### Prerequisites
 
 - **Windows 10/11** or **macOS** (Apple Silicon or Intel) — see [macOS](#macos) below
 - **Python 3.11+** (3.12 recommended) — [python.org/downloads](https://www.python.org/downloads/)
 - **Ollama** — [ollama.com/download](https://ollama.com/download) (for local LLM)
 
-### 1. Install
+#### 1. Install
 
 ```bash
-git clone https://github.com/PanPenek/jarvis.git
-cd jarvis
+git clone https://github.com/Hahne111/Jarvis.git
+cd Jarvis
 install.bat
 ```
 
@@ -47,7 +126,7 @@ This will:
 2. Install all 18 dependencies
 3. Download wake word ONNX models
 
-### 2. Pull an LLM model
+#### 2. Pull an LLM model
 
 ```bash
 ollama pull qwen3:8b
@@ -55,7 +134,7 @@ ollama pull qwen3:8b
 
 Any Ollama model works — `qwen3:8b` is a good balance of speed and quality. Smaller options: `qwen3:4b`, `llama3.2:3b`. Larger: `qwen3:14b`, `llama3.1:8b`.
 
-### 3. Launch
+#### 3. Launch
 
 ```bash
 start.bat       # Windows
@@ -67,7 +146,7 @@ Jarvis will:
 - Open the web UI at **http://localhost:7860**
 - Speak "Good morning. Jarvis online."
 
-### 4. Use it
+#### 4. Use it
 
 | Method | How |
 |--------|-----|
@@ -77,25 +156,25 @@ Jarvis will:
 
 ---
 
-## macOS
+### macOS
 
 Tested target: iMac with Apple Silicon. Whisper runs on CPU (`stt.device: auto` picks CPU when there is no CUDA), Kokoro TTS runs on CPU, Ollama uses the GPU via Metal.
 
-### Requirements
+#### Requirements
 
 - [Homebrew](https://brew.sh), then `brew install python@3.12 portaudio espeak-ng` (install.sh does this for you)
 - [Ollama](https://ollama.com/download) running (`ollama serve`) with a pulled model (`ollama pull qwen3:8b`)
 
-### Install & start
+#### Install & start
 
 ```bash
-git clone https://github.com/PanPenek/jarvis.git
-cd jarvis
+git clone https://github.com/Hahne111/Jarvis.git
+cd Jarvis
 ./install.sh
 ./start.sh
 ```
 
-### Permissions (System Settings → Privacy & Security)
+#### Permissions (System Settings → Privacy & Security)
 
 Grant these to the terminal app you start Jarvis from (Terminal, iTerm, VS Code):
 
@@ -107,7 +186,7 @@ Grant these to the terminal app you start Jarvis from (Terminal, iTerm, VS Code)
 
 macOS prompts on first use; if a tool silently does nothing, check the permission is enabled and restart Jarvis.
 
-### macOS notes
+#### macOS notes
 
 - Keys in the terminal: **Esc** = stop, **F2** or **t** = type a command, **F3** or **m** = mute/unmute (there is no Insert key on Mac keyboards).
 - `set_brightness` needs `brew install brightness`.
@@ -115,7 +194,7 @@ macOS prompts on first use; if a tool silently does nothing, check the permissio
 
 ---
 
-## Architecture
+### Architecture
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -140,9 +219,9 @@ macOS prompts on first use; if a tool silently does nothing, check the permissio
 
 ---
 
-## Tools (32)
+### Tools (32)
 
-### Desktop Automation & Vision
+#### Desktop Automation & Vision
 | Tool | Description |
 |------|-------------|
 | `read_screen` | Screenshot + OCR — returns all visible text with coordinates |
@@ -157,7 +236,7 @@ macOS prompts on first use; if a tool silently does nothing, check the permissio
 | `media_control` | Play/pause/next/previous/mute media |
 | `screenshot` | Save screenshot to Desktop |
 
-### Apps & Web
+#### Apps & Web
 | Tool | Description |
 |------|-------------|
 | `open_app` | Launch apps by name (30+ mapped: Chrome, Discord, VS Code, Spotify...) |
@@ -167,7 +246,7 @@ macOS prompts on first use; if a tool silently does nothing, check the permissio
 | `fetch_page` | Fetch and extract text from a URL |
 | `get_weather` | Current weather for any location |
 
-### System Control
+#### System Control
 | Tool | Description |
 |------|-------------|
 | `set_volume` / `get_volume` | Control system volume (0-100%) |
@@ -179,7 +258,7 @@ macOS prompts on first use; if a tool silently does nothing, check the permissio
 | `lock_screen` | Lock workstation |
 | `power_command` | Shutdown, restart, or sleep |
 
-### Files & Code
+#### Files & Code
 | Tool | Description |
 |------|-------------|
 | `read_file` / `write_file` | Read/write files (sandboxed to allowed paths) |
@@ -189,7 +268,7 @@ macOS prompts on first use; if a tool silently does nothing, check the permissio
 
 ---
 
-## Web UI
+### Web UI
 
 The web interface runs at `http://localhost:7860` and provides:
 
@@ -203,11 +282,11 @@ The web interface runs at `http://localhost:7860` and provides:
 
 ---
 
-## Configuration
+### Configuration
 
 All settings are in `config.yaml`. You can also change most of them from the web UI's Config tab.
 
-### Adding a Cloud LLM Provider
+#### Adding a Cloud LLM Provider
 
 Open the web UI → Config tab → **Add Provider**, or edit `config.yaml`:
 
@@ -234,7 +313,7 @@ llm:
 
 Any OpenAI-compatible API works (LM Studio, vLLM, Together AI, Groq, etc.)
 
-### STT Options
+#### STT Options
 
 ```yaml
 stt:
@@ -243,7 +322,7 @@ stt:
   compute_type: int8
 ```
 
-### TTS Options
+#### TTS Options
 
 ```yaml
 tts:
@@ -253,7 +332,7 @@ tts:
 
 ---
 
-## Controls
+### Controls
 
 | Input | Action |
 |-------|--------|
@@ -268,7 +347,21 @@ tts:
 
 ---
 
-## Project Structure
+### Project Structure
+
+```
+core/        JARVIS Core: events, missions, permissions, capabilities, verifier, intents, api, models, agents, memory, devices, notify, news, scheduler, proactive, skills, release/updater/backup
+adapters/    desktop, workspace, home (Fake + echte Backends)
+voice/       Voice 0.1 gegen den Core
+apps/        Web-HUD (apps/desktop/web)
+skills/      Skill-SDK + Beispiel-Skill
+tests/       Prototyp-Tests, tests/core, tests/regression
+docs/        Blueprint, SPEC, SECURITY, PERFORMANCE, STATUS, RELEASE, REMOTE, HOME_ASSISTANT, ADRs
+infra/       Docker Compose (PostgreSQL + pgvector)
+release/     nur der öffentliche Release-Schlüssel
+```
+
+Legacy-Prototyp:
 
 ```
 jarvis/
@@ -305,7 +398,7 @@ jarvis/
 
 ---
 
-## Troubleshooting
+### Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
@@ -318,7 +411,7 @@ jarvis/
 
 ---
 
-## Tech Stack
+### Tech Stack
 
 | Component | Technology |
 |-----------|------------|
