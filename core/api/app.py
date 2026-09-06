@@ -16,6 +16,7 @@ Endpoints
     GET/POST /schedule, POST /schedule/{id}/run|enable|disable|delete   background jobs
     GET  /suggestions, POST /suggestions/scan, POST /suggestions/{id}/accept|dismiss
     GET/POST /brief, GET /privacy                    daily brief, privacy mode
+    GET /skills, POST /skills/review|install, POST /skills/{name}/enable|disable|rollback
     GET  /news?country&topic&limit, /news/countries, /news/{id}, POST /news/refresh   globe data
     POST /telemetry {point, ms}                     HUD frame/input timings -> telemetry.latency
     Signed requests (X-Jarvis-Device/Timestamp/Nonce/Signature) bind device_trusted to the
@@ -178,6 +179,12 @@ class JobIn(BaseModel):
     weekdays: list[int] | None = None
     max_runs: int | None = Field(default=None, ge=1)
     budget_s: int = Field(default=900, ge=60, le=86_400)
+
+
+class SkillPathIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    run_tests: bool = True
+    skip_tests: bool = False
 
 
 class HandoverIn(BaseModel):
@@ -655,6 +662,51 @@ def create_app(runtime: CoreRuntime, *, scheduler: bool | None = None) -> FastAP
     @app.get("/privacy")
     def privacy_get() -> dict[str, Any]:
         return runtime.privacy.state.to_dict()
+
+    # -- skill factory (SPEC §15) ----------------------------------------------------------------
+
+    async def _skill_call(who: Caller, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        res = await runtime.executor.run(
+            name,
+            args,
+            actor=f"owner:{who.device_id('api') or 'api'}",
+            correlation_id="skills",
+            device_id=who.device_id(None),
+            device_trusted=who.effective_trust(True),
+        )
+        inv, ver = res.invocation, res.verification
+        out = {"invocation": inv.to_dict(), "verification": ver.to_dict()}
+        if inv.status is InvocationStatus.AWAITING_APPROVAL:
+            return {**out, "status": "waiting_for_approval", "decision_id": inv.decision_id}
+        if res.ok:
+            return {**out, "status": "completed", "result": inv.result}
+        return {**out, "status": inv.status.value, "error": inv.error or ver.reason}
+
+    @app.get("/skills")
+    def skills_list() -> dict[str, Any]:
+        items = runtime.skills.list()
+        return {"skills": items, "count": len(items), "root": str(runtime.skills.root)}
+
+    @app.post("/skills/review")
+    async def skills_review(body: SkillPathIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        return await _skill_call(
+            who, "skill.review", {"path": body.path, "run_tests": body.run_tests}
+        )
+
+    @app.post("/skills/install")
+    async def skills_install(body: SkillPathIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        return await _skill_call(
+            who, "skill.install", {"path": body.path, "skip_tests": body.skip_tests}
+        )
+
+    @app.post("/skills/{name}/{action}")
+    async def skills_action(name: str, action: str, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        if action not in ("enable", "disable", "rollback"):
+            raise HTTPException(400, "action must be enable|disable|rollback")
+        return await _skill_call(who, f"skill.{action}", {"name": name})
 
     @app.get("/notifications")
     def notifications(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:

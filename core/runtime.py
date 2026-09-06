@@ -65,6 +65,7 @@ from core.proactive import (
     register_privacy,
 )
 from core.scheduler import JobStore, Scheduler
+from core.skills import SkillRegistry, make_sandbox_runner, register_skill_capabilities
 from core.verifier import (
     VerificationService,
     VerifiedExecutor,
@@ -74,6 +75,7 @@ from core.verifier import (
 
 DEFAULT_DB_URL = "sqlite:///jarvis/data/core.db"
 DEFAULT_WORKSPACE_ROOT = "jarvis/data/workspaces"
+DEFAULT_SKILLS_ROOT = "jarvis/data/skills"
 
 
 @dataclass
@@ -106,6 +108,7 @@ class CoreRuntime:
     habits: HabitDetector
     privacy: PrivacyService
     brief: BriefBuilder
+    skills: SkillRegistry
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -122,6 +125,7 @@ class CoreRuntime:
         router: ModelRouter | None = None,
         desktop: DesktopBackend | str | None = None,
         workspace_root: str | None = None,
+        skills_root: str | None = None,
         home: HomeBackend | str | None = None,
         wol: WolService | None = None,
         push: PushTransport | str | None = None,
@@ -218,7 +222,11 @@ class CoreRuntime:
             habits=habits,
             privacy=privacy,
             brief=None,  # type: ignore[arg-type]
+            skills=None,  # type: ignore[arg-type]
             db_url=url,
+        )
+        runtime._skills_root = skills_root or os.environ.get(
+            "JARVIS_SKILLS_ROOT", DEFAULT_SKILLS_ROOT
         )
         runtime._wire_proactive()
         return runtime
@@ -252,6 +260,16 @@ class CoreRuntime:
             run_capability=self.executor.run,
         )
         self.scheduler.ensure_system_jobs()
+        self.skills = SkillRegistry(
+            self._skills_root,
+            self.capabilities,
+            self.verifiers,
+            self.bus,
+            call=self.executor.run,
+            run_tests=make_sandbox_runner(self.workspaces),
+        )
+        register_skill_capabilities(self.capabilities, self.verifiers, self.skills)
+        self.skills.restore()
 
     def _push_gate(self, ev: Any) -> bool:
         """Relevance Engine decides what may reach the phone; privacy narrows it further."""
@@ -301,6 +319,7 @@ class CoreRuntime:
             "push": self.notify.transport.name if self.notify else None,
             "news": self.news.store.count() if self.news else None,
             "privacy": self.privacy.mode,
+            "skills": len(self.skills.list()),
             "scheduler": {
                 "running": self.scheduler.snapshot()["running"],
                 "jobs": len(self.scheduler.store.list()),

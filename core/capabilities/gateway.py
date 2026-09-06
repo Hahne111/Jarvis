@@ -39,6 +39,8 @@ SOURCE = "execution-gateway"
 # Handlers can read the correlation id (mission) of the invocation that is running them.
 current_correlation_id: ContextVar[str | None] = ContextVar("jarvis_correlation_id", default=None)
 current_actor: ContextVar[str | None] = ContextVar("jarvis_actor", default=None)
+current_user_id: ContextVar[str] = ContextVar("jarvis_user_id", default="local-owner")
+current_device_id: ContextVar[str | None] = ContextVar("jarvis_device_id", default=None)
 
 
 class InvocationStatus(StrEnum):
@@ -237,6 +239,8 @@ class ExecutionGateway:
         status = InvocationStatus.FAILED
         tok_c = current_correlation_id.set(correlation_id)
         tok_a = current_actor.set(actor)
+        tok_u = current_user_id.set(user_id)
+        tok_d = current_device_id.set(device_id)
         for attempt in range(1, manifest.retries + 2):
             inv.attempts = attempt
             try:
@@ -254,6 +258,8 @@ class ExecutionGateway:
                 status = InvocationStatus.FAILED
         current_correlation_id.reset(tok_c)
         current_actor.reset(tok_a)
+        current_user_id.reset(tok_u)
+        current_device_id.reset(tok_d)
         cap.health.record(status is InvocationStatus.SUCCEEDED, inv.error)
         return await self._finish(inv, status, env)
 
