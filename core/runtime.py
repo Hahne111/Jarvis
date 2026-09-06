@@ -19,7 +19,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from adapters.desktop import DesktopBackend, FakeDesktop, PrototypeDesktop, register_desktop
-from adapters.home import FakeHome, HomeAssistantBackend, HomeBackend, HomeService, register_home
+from adapters.home import (
+    FakeHome,
+    FakeNetwork,
+    HomeAssistantBackend,
+    HomeBackend,
+    HomeService,
+    WolService,
+    default_wol_targets,
+    register_home,
+    register_wol,
+    targets_from_env,
+)
 from adapters.workspace import WorkspaceManager, register_workspace
 
 from core import __version__
@@ -71,6 +82,7 @@ class CoreRuntime:
     presence: PresenceService
     workspaces: WorkspaceManager
     home: HomeService | None
+    wol: WolService | None
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -88,6 +100,7 @@ class CoreRuntime:
         desktop: DesktopBackend | str | None = None,
         workspace_root: str | None = None,
         home: HomeBackend | str | None = None,
+        wol: WolService | None = None,
     ) -> CoreRuntime:
         url = db_url or os.environ.get("JARVIS_CORE_DB_URL", DEFAULT_DB_URL)
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
@@ -116,6 +129,9 @@ class CoreRuntime:
         home_service = HomeService(home_backend, bus) if home_backend is not None else None
         if home_service is not None:
             register_home(capabilities, verifiers, home_service)
+        wol_service = wol if wol is not None else _wol_service(home, bus)
+        if wol_service is not None:
+            register_wol(capabilities, verifiers, wol_service)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -153,6 +169,7 @@ class CoreRuntime:
             presence=presence,
             workspaces=workspaces,
             home=home_service,
+            wol=wol_service,
             db_url=url,
         )
 
@@ -206,6 +223,20 @@ def _desktop_backend(choice: DesktopBackend | str | None) -> DesktopBackend | No
     if choice.lower() == "prototype":
         return PrototypeDesktop()
     raise ValueError(f"unknown JARVIS_DESKTOP {choice!r} (off | fake | prototype)")
+
+
+def _wol_service(home_choice: HomeBackend | str | None, bus: EventBus) -> WolService | None:
+    """WOL targets from JARVIS_WOL_TARGETS (real network); JARVIS_HOME=fake gets a demo target
+    on a fake network so the HUD/tests can exercise power.wake without touching the LAN."""
+    targets = targets_from_env()
+    if targets:
+        return WolService(targets, bus)
+    choice = home_choice if home_choice is not None else os.environ.get("JARVIS_HOME")
+    if isinstance(choice, str) and choice.lower() == "fake":
+        demo = default_wol_targets()
+        net = FakeNetwork(mac_to_host={t.mac.lower(): t.host for t in demo})
+        return WolService(demo, bus, net, verify_timeout_s=2.0)
+    return None
 
 
 def _home_backend(choice: HomeBackend | str | None) -> HomeBackend | None:

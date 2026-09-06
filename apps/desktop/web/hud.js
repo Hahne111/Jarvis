@@ -85,8 +85,39 @@ function ingest(e) {
   }
   if (e.type.startsWith("mission.") || e.type.startsWith("permission.") || e.type.startsWith("memory.")) queueRefresh();
   if (CODING_TYPES.some((t) => e.type.startsWith(t))) coding.onEvent(e);
+  if (e.type.startsWith("home.") || e.type === "power.wake.sent") home.queue();
   scheduleRender();
 }
+
+// -------- home (SPEC §11) ---------------------------------------------------------------------------
+// Rooms, devices and the home state come from GET /home (refreshed on home.* events). Every click
+// is a plain text command through /commands -> fast path -> gateway; P4 devices are display-only.
+const home = {
+  timer: null,
+  queue() { if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.refresh(); }, 200); },
+  async refresh() {
+    const h = await api("/home").catch(() => ({ enabled: false }));
+    $("homePanel").hidden = !h.enabled;
+    if (!h.enabled) return;
+    $("homeState").textContent = h.state.state.toUpperCase();
+    $("homeOnline").textContent = h.online ? `${h.backend} · online` : `${h.backend} · OFFLINE (local basics only)`;
+    $("homeStates").innerHTML = h.state.states.map((s) => `<span class="chip ${s === h.state.state ? "active" : ""}" data-state="${s}">${s}</span>`).join("");
+    const byRoom = new Map(h.rooms.map((r) => [r.room_id, []]));
+    for (const d of h.devices) (byRoom.get((d.area || "unassigned").toLowerCase().replace(/[\s-]+/g, "_")) || byRoom.set("unassigned", []).get("unassigned")).push(d);
+    $("homeRooms").innerHTML = [...byRoom.entries()].map(([room, devs]) => `<div class="room"><b>${esc(room)}</b>${devs.map((d) => {
+      const p4 = ["lock", "alarm_control_panel"].includes(d.domain) || d.device_class === "garage";
+      const on = ["on", "open", "unlocked", "armed_away", "armed_home", "armed_night"].includes(d.state);
+      const val = d.domain === "climate" ? ` ${d.attributes.temperature ?? ""}°` : "";
+      return `<span class="dev ${on ? "on" : ""} ${p4 ? "p4" : ""}" data-room="${esc(room)}" data-domain="${d.domain}" data-state="${esc(d.state)}" title="${esc(d.entity_id)} · ${esc(d.state)}">${esc(d.name)}${val}</span>`;
+    }).join("")}</div>`).join("");
+  },
+};
+$("homeStates").addEventListener("click", (e) => { const c = e.target.closest("[data-state]"); if (c) api("/commands", { method: "POST", body: JSON.stringify({ text: `set home mode to ${c.dataset.state}`, device_id: "hud", device_trusted: $("trusted").checked }) }); });
+$("homeRooms").addEventListener("click", (e) => {
+  const d = e.target.closest(".dev"); if (!d || d.classList.contains("p4") || d.dataset.domain !== "light") return;
+  const text = `turn ${d.dataset.state === "on" ? "off" : "on"} the ${d.dataset.room} light`;
+  api("/commands", { method: "POST", body: JSON.stringify({ text, device_id: "hud", device_trusted: $("trusted").checked }) });
+});
 
 // -------- coding mode (SPEC §12.1) --------------------------------------------------------------
 // Editor (Monaco from /hud/vendor, never a CDN; textarea fallback), diff, terminal, preview,
@@ -289,4 +320,4 @@ $("railFilter").addEventListener("change", (e) => { state.filter = e.target.valu
 $("memQuery").addEventListener("input", queueRefresh);
 
 // -------- boot ------------------------------------------------------------------------------
-connect(); refreshHealth(); refreshLists(); coding.refresh(); editor.boot(); setInterval(refreshHealth, 5000);
+connect(); refreshHealth(); refreshLists(); coding.refresh(); home.refresh(); editor.boot(); setInterval(refreshHealth, 5000);

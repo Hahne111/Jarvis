@@ -35,7 +35,7 @@ from core.verifier.service import VerifierRegistry
 
 from adapters.home.backend import GARAGE_CLASSES, Entity, HomeBackend, HomeUnavailable
 from adapters.home.registry import DeviceRegistry
-from adapters.home.states import HomeState, HomeStateMachine
+from adapters.home.states import HomeState, HomeStateMachine, HomeStatePolicy
 
 SOURCE = "home"
 TRUSTED = ("device.trusted",)
@@ -117,11 +117,15 @@ HOME_MANIFESTS: tuple[CapabilityManifest, ...] = (
         name="home.state.set",
         version="1.0",
         risk=RiskLevel.P2,
-        inputs={"state": "string"},
+        inputs={"state": "string", "apply_defaults": "boolean?"},
         side_effects=True,
         reversible=True,
         verifier="home.mode_is",
-        description="Set the home state: home, away, sleep, work, movie, guests, night, vacation.",
+        description=(
+            "Set the home state: home, away, sleep, work, movie, guests, night, vacation. "
+            "apply_defaults=true also applies the state's light/climate defaults (only for "
+            "domains the state's device policy allows; never locks, alarms or garages)."
+        ),
     ),
     CapabilityManifest(
         name="home.lock.set",
@@ -357,11 +361,49 @@ def register_home(
             ) from None
         now = datetime.now(UTC).isoformat()
         old, new = service.states.set(wanted, at=now)
+        policy = service.states.policy()
         await emit(
-            "home.state.changed",
-            {"from": old.value, "to": new.value, "policy": service.states.policy().to_dict()},
+            "home.state.changed", {"from": old.value, "to": new.value, "policy": policy.to_dict()}
         )
-        return {"from": old.value, "to": new.value, "policy": service.states.policy().to_dict()}
+        applied: list[dict[str, Any]] = []
+        if args.get("apply_defaults"):
+            applied = await apply_state_defaults(policy)
+        return {"from": old.value, "to": new.value, "policy": policy.to_dict(), "applied": applied}
+
+    async def apply_state_defaults(policy: HomeStatePolicy) -> list[dict[str, Any]]:
+        """Offline basics (step 56): a state change may set lights/climate - never security."""
+        try:
+            await service.sync(force=True)
+        except HomeUnavailable:
+            return [{"skipped": "home gateway offline"}]
+        applied: list[dict[str, Any]] = []
+        lighting = {
+            "off": ("turn_off", {}),
+            "dim": ("turn_on", {"brightness": 80}),
+            "night": ("turn_on", {"brightness": 25}),
+        }.get(policy.lighting)
+        if "light" in policy.device_policy and lighting:
+            svc, data = lighting
+            lights = service.registry.devices(domain="light")
+            want = {"state": "off" if svc == "turn_off" else "on", **data}
+            try:
+                applied.extend((await act(lights, "light", svc, data, want))["changes"])
+            except (HomeUnavailable, ValueError) as exc:
+                applied.append({"skipped": f"lights: {exc}"})
+        if "climate" in policy.device_policy:
+            thermostats = service.registry.devices(domain="climate")
+            try:
+                res = await act(
+                    thermostats,
+                    "climate",
+                    "set_temperature",
+                    {"temperature": policy.climate_c},
+                    {"temperature": policy.climate_c},
+                )
+                applied.extend(res["changes"])
+            except (HomeUnavailable, ValueError) as exc:
+                applied.append({"skipped": f"climate: {exc}"})
+        return applied
 
     # -- P4 security actions (SECURITY.md §4) ------------------------------------------------
 

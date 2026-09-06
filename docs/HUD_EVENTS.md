@@ -32,7 +32,9 @@ Das HUD (Tauri/React, später Mobile) rendert **ausschließlich persistierte Eve
 | Coding: Quality | `workspace.run.finished` + `verification.passed|failed` (`capability=workspace.run`), `agent.run.finished` (`outcome`, z. B. `not_verified`) | „grün“ = letzter Run Exit 0 **und** `verification.passed` |
 | Coding: Artifacts | `artifact.created` (`path`, `size`, `sha256`, `run_id`) beim Abschluss einer Coding-Mission | Öffnen über `/file`, Vorschau über `/preview/<path>` |
 | Coding: Preview | `GET /workspace/{mission}/preview/<path>` im `<iframe sandbox="allow-scripts">` | nur Dateien des Missions-Workspaces, CSP-Sandbox, kein Cache |
-| Home (Phase 8; Panel folgt) | `home.device.changed` (`entity_id`, `from`, `to`, `domain`, `service`, `actor`), `home.state.changed` (`from`, `to`, `policy`), Daten via `GET /home` (Räume, Geräte, State, `online`) | Aktionen nur über `/commands` bzw. Capabilities `home.*`; Lock/Alarm/Garage erscheinen als `permission.ask` mit `required_strength=3` |
+| Power / WOL | `power.wake.sent` (`name`, `host`, `port`, `actor`; nie die MAC), Erreichbarkeit via Capability `power.status` | `power.wake` ist P3 ⇒ erscheint als `permission.ask` |
+| Voice-Satelliten | `voice.transcript|thinking|speaking|idle` mit `device_id=satellite:<id>` (Quelle `satellite`, `POST /satellite/command`) | Presence pro Satellit; Antworttext im `voice.speaking`-Payload |
+| Home (Phase 8) | `home.device.changed` (`entity_id`, `from`, `to`, `domain`, `service`, `actor`), `home.state.changed` (`from`, `to`, `policy`), Daten via `GET /home` (Räume, Geräte, State, `online`) | Aktionen nur über `/commands` bzw. Capabilities `home.*`; Lock/Alarm/Garage erscheinen als `permission.ask` mit `required_strength=3` |
 
 ## Presence-Zustände (`presence.changed`)
 `idle | listening | thinking | speaking | working | awaiting_approval | halted` pro `device_id`

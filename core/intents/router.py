@@ -90,6 +90,18 @@ _HOME_PHRASES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\s*(gute nacht|good ?night|schlafenszeit)\s*[.!]?\s*$", re.I), "sleep"),
     (re.compile(r"^\s*(filmabend|movie (time|night|mode)|kino ?modus)\s*[.!]?\s*$", re.I), "movie"),
 )
+_WAKE = re.compile(  # "wake desktop", "weck den pc", "pc einschalten", "schalte den rechner ein"
+    r"^\s*((wake( up)?|weck(e)?)\s+((the|den|das|my|meinen?)\s+)?(?P<t1>[a-z0-9_-]{2,32})"
+    r"|(schalte?\s+)?((the|den|das|meinen?)\s+)?(?P<t2>pc|rechner|computer|desktop|server|nas)"
+    r"\s+(einschalten|ein|anschalten|an))\s*[.!]?\s*$",
+    re.I,
+)
+_WAKE_ALIASES = {
+    "pc": "desktop",
+    "rechner": "desktop",
+    "computer": "desktop",
+    "workstation": "desktop",
+}
 _WINDOWS = re.compile(
     r"^\s*(list|show|zeige?)( the| die| alle)?( open| offenen)? (windows|fenster)\s*[?.]?\s*$", re.I
 )
@@ -139,6 +151,10 @@ class IntentRouter:
                     return Intent(
                         "capability", "home.light.set", {"target": room, "on": on}, text=text
                     )
+        if (m := _WAKE.match(text)) and "power.wake" in self._caps:
+            target = (m.group("t1") or m.group("t2") or "").lower()
+            target = _WAKE_ALIASES.get(target, target)
+            return Intent("capability", "power.wake", {"target": target}, text=text)
         if (m := _SCENE.match(text)) and "home.scene.activate" in self._caps:
             return Intent(
                 "capability", "home.scene.activate", {"target": m.group("name").strip()}, text=text

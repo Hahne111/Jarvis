@@ -36,7 +36,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core.api.commands import execute_call, run_text_command, safe_transition, settle_agent_run
+from core.api.commands import (
+    execute_call,
+    run_text_command,
+    safe_transition,
+    settle_agent_run,
+    spoken_summary,
+)
 from core.capabilities import InvocationStatus
 from core.events.envelope import Event
 from core.memory import MemoryPolicyError, MemoryType
@@ -112,6 +118,13 @@ class PolicyIn(BaseModel):
 class DontLearnIn(BaseModel):
     subject: str = Field(min_length=1)
     predicate: str = "*"
+
+
+class SatelliteIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    satellite_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    user_id: str = "local-owner"
+    device_trusted: bool = False  # strict default; the owner enrolls satellites explicitly
 
 
 class WorkspaceWriteIn(BaseModel):
@@ -192,6 +205,30 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             device_trusted=body.device_trusted,
             source="core-api",
         )
+
+    @app.post("/satellite/command")
+    async def satellite_command(body: SatelliteIn) -> dict[str, Any]:
+        """Voice satellite (e.g. Home Assistant Assist 'Hey Jarvis'): final transcript in,
+        short spoken answer out. The satellite is a device like any other: voice can never
+        satisfy a P3+ approval, and it is untrusted unless the owner enrolled it."""
+        dev = f"satellite:{body.satellite_id}"
+        ev = dict(correlation_id="voice", user_id=body.user_id, device_id=dev)
+        await runtime.bus.publish(
+            Event.new("voice.transcript", "satellite", {"text": body.text, "final": True}, **ev)
+        )
+        await runtime.bus.publish(Event.new("voice.thinking", "satellite", {}, **ev))
+        result = await run_text_command(
+            runtime,
+            body.text,
+            user_id=body.user_id,
+            device_id=dev,
+            device_trusted=body.device_trusted,
+            source="satellite",
+        )
+        speech = spoken_summary(result)
+        await runtime.bus.publish(Event.new("voice.speaking", "satellite", {"text": speech}, **ev))
+        await runtime.bus.publish(Event.new("voice.idle", "satellite", {}, **ev))
+        return {**result, "speech": speech, "device_id": dev}
 
     # -- missions ------------------------------------------------------------------------------
 

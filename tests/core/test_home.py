@@ -355,3 +355,194 @@ def test_home_assistant_backend_parses_states(monkeypatch):
     assert calls[-1][:2] == ("POST", "/api/services/light/turn_on") and calls[-1][2] == "Bearer tok"
     with pytest.raises(HomeUnavailable):
         run(b._request("GET", "/api/forbidden"))
+
+
+# ---------------------------------------------------------------- phase 8: wol / satellite
+
+
+def test_wake_on_lan_packet_approval_and_verifier(tmp_path):
+    from adapters.home import FakeNetwork, WakeTarget, WolService, load_targets
+
+    targets = load_targets(
+        '[{"name": "Desktop", "mac": "aa:bb:cc:dd:ee:ff", "host": "10.0.0.5", "port": 3389},'
+        ' {"name": "nas", "mac": "AA-BB-CC-DD-EE-01", "host": "10.0.0.6"}]'
+    )
+    assert [t.name for t in targets] == ["Desktop", "nas"] and targets[1].port == 22
+    pkt = targets[0].magic_packet()
+    assert len(pkt) == 102 and pkt[:6] == b"\xff" * 6 and pkt[6:12] == bytes.fromhex("aabbccddeeff")
+    with pytest.raises(ValueError):
+        WakeTarget("bad", "zz:zz", "10.0.0.1")
+    (tmp_path / "wol.json").write_text('[{"name": "x", "mac": "02:00:00:00:00:02", "host": "h"}]')
+    assert load_targets(str(tmp_path / "wol.json"))[0].name == "x" and load_targets("") == []
+
+    net = FakeNetwork(wake_after=2, mac_to_host={"aa:bb:cc:dd:ee:ff": "10.0.0.5"})
+    net.never.add("10.0.0.6")
+    rt = CoreRuntime.build(f"sqlite:///{tmp_path / 'w.db'}", provider="none", home=FakeHome())
+    rt2 = CoreRuntime.build(
+        f"sqlite:///{tmp_path / 'w2.db'}",
+        provider="none",
+        wol=WolService(targets, rt.bus, net, verify_timeout_s=0.5, probe_timeout_s=0.1),
+    )
+    assert "power.wake" in rt2.capabilities and rt2.home is None
+    st = run(rt2.executor.run("power.status", {}, **KW))
+    assert st.ok and [t["reachable"] for t in st.invocation.result["targets"]] == [False, False]
+    assert "mac" not in str(st.invocation.result)  # hardware ids stay out of results/events
+
+    w = run(rt2.executor.run("power.wake", {"target": "desktop"}, **KW))
+    assert w.invocation.status is InvocationStatus.AWAITING_APPROVAL  # P3
+    run(rt2.permissions.approve(w.invocation.decision_id, CONFIRM))
+    first = run(
+        rt2.executor.run(
+            "power.wake", {"target": "desktop"}, decision_id=w.invocation.decision_id, **KW
+        )
+    )
+    # one packet is not enough for this host: sent, but the verifier says not reachable
+    assert first.invocation.ok and first.invocation.result["sent"]
+    assert first.verification.outcome is Outcome.NOT_ACHIEVED and not first.ok
+    assert len(net.packets) == 1 and net.packets[0][1:] == ("255.255.255.255", 9)
+    w2 = run(rt2.executor.run("power.wake", {"target": "desktop"}, **KW))
+    run(rt2.permissions.approve(w2.invocation.decision_id, CONFIRM))
+    second = run(
+        rt2.executor.run(
+            "power.wake", {"target": "desktop"}, decision_id=w2.invocation.decision_id, **KW
+        )
+    )
+    assert second.ok and second.verification.outcome is Outcome.ACHIEVED
+    assert "power.wake.sent" in types(rt)  # the service publishes on the bus it was given
+    again = run(rt2.executor.run("power.wake", {"target": "desktop"}, **KW))
+    run(rt2.permissions.approve(again.invocation.decision_id, CONFIRM))
+    noop = run(
+        rt2.executor.run(
+            "power.wake", {"target": "desktop"}, decision_id=again.invocation.decision_id, **KW
+        )
+    )
+    assert noop.ok and noop.invocation.result["already_online"] and len(net.packets) == 2
+    unknown = run(rt2.executor.run("power.wake", {"target": "toaster"}, **KW))
+    run(rt2.permissions.approve(unknown.invocation.decision_id, CONFIRM))
+    unknown = run(
+        rt2.executor.run(
+            "power.wake", {"target": "toaster"}, decision_id=unknown.invocation.decision_id, **KW
+        )
+    )
+    assert (
+        unknown.invocation.status is InvocationStatus.FAILED
+        and "unknown wake target" in unknown.invocation.error
+    )
+    untrusted = run(
+        rt2.executor.run(
+            "power.wake",
+            {"target": "nas"},
+            actor="agent",
+            correlation_id="m3",
+            device_trusted=False,
+        )
+    )
+    assert untrusted.invocation.status is InvocationStatus.DENIED
+
+    for text in ("wake desktop", "Weck den PC", "pc einschalten", "schalte den Rechner ein"):
+        i = rt2.intents.route(text)
+        assert (i.capability, i.args) == ("power.wake", {"target": "desktop"}), text
+    assert rt2.intents.route("start vscode").capability != "power.wake"
+
+
+def test_fake_home_ships_a_demo_wol_target(tmp_path):
+    rt = CoreRuntime.build(f"sqlite:///{tmp_path / 'f.db'}", provider="none", home="fake")
+    assert rt.wol is not None and "desktop" in rt.wol.targets and "power.wake" in rt.capabilities
+    assert rt.wol.network.__class__.__name__ == "FakeNetwork"  # never the real LAN in fake mode
+
+
+def test_voice_satellite_roundtrip(tmp_path):
+    from core.api import create_app
+    from fastapi.testclient import TestClient
+
+    rt = CoreRuntime.build(f"sqlite:///{tmp_path / 's.db'}", provider="none", home="fake")
+    home = rt.home.backend
+    client = TestClient(create_app(rt))
+    r = client.post(
+        "/satellite/command",
+        json={"text": "licht an im wohnzimmer", "satellite_id": "kitchen-puck"},
+    )
+    body = r.json()
+    assert body["status"] == "completed" and body["speech"] == "Done."
+    assert (
+        body["device_id"] == "satellite:kitchen-puck"
+        and home.entities["light.living_room"].state == "on"
+    )
+    voice = [
+        e
+        for _, e in rt.bus.replay(correlation_id="voice")
+        if e.device_id == "satellite:kitchen-puck"
+    ]
+    assert [e.type for e in voice] == [
+        "voice.transcript",
+        "voice.thinking",
+        "voice.speaking",
+        "voice.idle",
+    ]
+    assert voice[0].payload == {"text": "licht an im wohnzimmer", "final": True}
+    assert "satellite:kitchen-puck" in rt.presence.snapshot()["devices"]
+
+    # security devices: voice can only ask, never unlock; the satellite is untrusted by default
+    r = client.post(
+        "/satellite/command", json={"text": "unlock the front door", "satellite_id": "kitchen-puck"}
+    )
+    assert r.json()["status"] in ("blocked", "failed")  # no provider -> deep path blocked
+    r = client.post(
+        "/satellite/command",
+        json={"text": "wake desktop", "satellite_id": "kitchen-puck", "device_trusted": True},
+    )
+    assert r.json()["status"] == "waiting_for_approval" and "confirmation" in r.json()["speech"]
+    assert (
+        client.post("/satellite/command", json={"text": "x", "satellite_id": "bad id!"}).status_code
+        == 422
+    )
+    stop = client.post(
+        "/satellite/command", json={"text": "jarvis, stop", "satellite_id": "kitchen-puck"}
+    ).json()
+    assert stop["speech"] == "Stopped." and rt.gateway.halted
+    r = client.post(
+        "/satellite/command", json={"text": "licht aus", "satellite_id": "kitchen-puck"}
+    ).json()
+    assert r["status"] == "halted" and "passkey" in r["speech"]
+
+
+def test_state_defaults_touch_only_permitted_domains(rt, home):
+    r = run(rt.executor.run("home.state.set", {"state": "movie", "apply_defaults": True}, **KW))
+    assert r.ok
+    assert (
+        home.entities["light.kitchen"].state == "on"
+        and home.entities["light.kitchen"].attributes["brightness"] == 80
+    )
+    assert (
+        home.entities["climate.living_room"].attributes["temperature"] == 20.0
+    )  # climate not in movie policy
+    assert home.entities["lock.front_door"].state == "locked"
+    r = run(rt.executor.run("home.state.set", {"state": "away", "apply_defaults": True}, **KW))
+    assert r.ok and home.entities["light.kitchen"].state == "off"
+    assert (
+        home.entities["climate.living_room"].attributes["temperature"] == 20.0
+    )  # away: lights/switches only
+    r = run(rt.executor.run("home.state.set", {"state": "home", "apply_defaults": True}, **KW))
+    assert r.ok and home.entities["climate.living_room"].attributes["temperature"] == 21.0
+    assert home.entities["light.kitchen"].state == "off"  # "day" lighting never forces lights on
+    r = run(rt.executor.run("home.state.set", {"state": "vacation", "apply_defaults": True}, **KW))
+    assert r.ok and r.invocation.result["applied"] == []  # empty device policy -> nothing touched
+    plain = run(rt.executor.run("home.state.set", {"state": "movie"}, **KW))
+    assert plain.ok and plain.invocation.result["applied"] == []
+    changed = [
+        e.payload["entity_id"]
+        for _, e in rt.bus.replay(correlation_id="m1")
+        if e.type == "home.device.changed"
+    ]
+    assert "lock.front_door" not in changed and "cover.garage" not in changed
+
+
+def test_hud_has_a_home_panel(rt):
+    from core.api import create_app
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app(rt))
+    html = client.get("/hud/").text
+    assert 'id="homePanel"' in html and 'id="homeRooms"' in html
+    js = client.get("/hud/hud.js").text
+    assert 'api("/home")' in js and "set home mode to" in js
