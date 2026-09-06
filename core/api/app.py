@@ -10,7 +10,22 @@ Endpoints
     POST /approvals/{decision_id}/approve {method, device_id, device_trusted, reference?}
     POST /approvals/{decision_id}/deny {reason?}
     POST /kill, POST /resume {method, device_id, device_trusted}
+    GET  /devices, POST /devices/enroll/start, POST /devices/enroll, POST /devices/{id}/revoke|trust
+    POST /missions/{id}/handover {to_device_id}   move responsibility desktop <-> mobile
+    GET  /notifications                             push deliveries (notify.sent|failed|suppressed)
+    GET/POST /schedule, POST /schedule/{id}/run|enable|disable|delete   background jobs
+    GET  /suggestions, POST /suggestions/scan, POST /suggestions/{id}/accept|dismiss
+    GET/POST /brief, GET /privacy                    daily brief, privacy mode
+    GET /skills, POST /skills/review|install, POST /skills/{name}/enable|disable|rollback
+    GET  /news?country&topic&limit, /news/countries, /news/{id}, POST /news/refresh   globe data
+    POST /telemetry {point, ms}                     HUD frame/input timings -> telemetry.latency
+    Signed requests (X-Jarvis-Device/Timestamp/Nonce/Signature) bind device_trusted to the
+    registry; unsigned callers are trusted only from loopback (core/devices/auth.py, ADR-0004)
+    GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
     GET  /debug                        minimal debug dashboard (static HTML)
+    GET  /hud/                         web-first HUD shell (apps/desktop/web, ADR-0003)
+    GET  /workspace/{mission}/files|file|diff|preview/{path}   read-only coding-mode views
+    PUT  /workspace/{mission}/file                             editor save via workspace.write
     GET  /memory?q&type&project        "What JARVIS Knows" (SPEC §8.4), /memory/{id}
     POST /memory/{id}/correct|forget|pin|unpin|temporary, /memory/forget_since, /memory/policy
 
@@ -22,21 +37,50 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from adapters.home import HomeUnavailable
+from adapters.workspace import WorkspaceError
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core.api.commands import execute_call, run_text_command, safe_transition, settle_agent_run
-from core.events.envelope import Event
+from core.api.commands import (
+    execute_call,
+    run_text_command,
+    safe_transition,
+    settle_agent_run,
+    spoken_summary,
+)
+from core.capabilities import InvocationStatus
+from core.devices import AuthError, Caller, DeviceType, EnrollmentError, valid_public_key
+from core.events.envelope import Event, Priority
 from core.memory import MemoryPolicyError, MemoryType
-from core.missions import MissionNotFound, MissionStatus
+from core.missions import InvalidTransition, MissionNotFound, MissionStatus
 from core.permissions import ApprovalError, ApprovalProof, PolicyViolation, ProofMethod
 from core.runtime import CoreRuntime
 
 _STATIC = Path(__file__).parent / "static"
+_PREVIEW_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".txt": "text/plain",
+    ".md": "text/plain",
+}
+_HUD = Path(__file__).resolve().parents[2] / "apps" / "desktop" / "web"
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 class CommandIn(BaseModel):
@@ -90,15 +134,164 @@ class DontLearnIn(BaseModel):
     predicate: str = "*"
 
 
-def create_app(runtime: CoreRuntime) -> FastAPI:
-    app = FastAPI(title="JARVIS Core", version=runtime.version, docs_url="/docs")
+class SatelliteIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    satellite_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    user_id: str = "local-owner"
+    device_trusted: bool = False  # strict default; the owner enrolls satellites explicitly
+
+
+class EnrollStartIn(BaseModel):
+    name_hint: str = Field(default="", max_length=120)
+    type: DeviceType = DeviceType.MOBILE
+    trusted: bool = True
+
+
+class EnrollIn(BaseModel):
+    code: str = Field(min_length=4, max_length=32)
+    name: str = Field(min_length=1, max_length=120)
+    public_key: str = Field(min_length=40, max_length=64)
+
+
+class RevokeIn(BaseModel):
+    reason: str | None = None
+
+
+class TrustIn(BaseModel):
+    trusted: bool
+
+
+class TelemetryIn(BaseModel):
+    point: str = Field(pattern=r"^(hud_frame|hud_input|globe_frame|hud_mode_switch)$")
+    ms: float = Field(ge=0, le=60_000)
+    samples: int = Field(default=1, ge=1, le=100_000)
+    device_id: str | None = None
+
+
+class JobIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    kind: str = Field(default="command", pattern=r"^(command|capability)$")
+    text: str | None = Field(default=None, max_length=2000)
+    capability: str | None = None
+    args: dict[str, Any] = Field(default_factory=dict)
+    every_s: int | None = Field(default=None, ge=60)
+    at: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    weekdays: list[int] | None = None
+    max_runs: int | None = Field(default=None, ge=1)
+    budget_s: int = Field(default=900, ge=60, le=86_400)
+
+
+class SkillPathIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    run_tests: bool = True
+    skip_tests: bool = False
+
+
+class HandoverIn(BaseModel):
+    to_device_id: str = Field(min_length=1, max_length=120)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class WorkspaceWriteIn(BaseModel):
+    path: str = Field(min_length=1, max_length=512)
+    content: str = Field(max_length=2_000_000)
+    device_id: str | None = None
+    device_trusted: bool = False
+    user_id: str = "local-owner"
+
+
+async def resolve_caller(request: Request) -> Caller:
+    """Who is calling: a signed device (the registry decides trust) or the loopback owner."""
+    runtime: CoreRuntime = request.app.state.runtime
+    body = await request.body()
+    host = request.client.host if request.client else None
+    try:
+        return runtime.auth.resolve(
+            dict(request.headers), request.method, request.url.path, body, host
+        )
+    except AuthError as exc:
+        await runtime.bus.publish(
+            Event.new(
+                "device.auth.failed",
+                "core-api",
+                {"device_id": exc.device_id, "reason": exc.reason, "path": request.url.path},
+                correlation_id="devices",
+                device_id=exc.device_id,
+            )
+        )
+        raise HTTPException(401, f"device authentication failed: {exc.reason}") from None
+
+
+CallerDep = Annotated[Caller, Depends(resolve_caller)]
+
+
+def create_app(runtime: CoreRuntime, *, scheduler: bool | None = None) -> FastAPI:
+    import os
+    from contextlib import asynccontextmanager
+
+    run_scheduler = (
+        scheduler
+        if scheduler is not None
+        else (os.environ.get("JARVIS_SCHEDULER", "off").lower() in ("1", "on", "true"))
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if run_scheduler:
+            runtime.scheduler.start()
+        yield
+        if run_scheduler:
+            await runtime.scheduler.stop()
+
+    app = FastAPI(title="JARVIS Core", version=runtime.version, docs_url="/docs", lifespan=lifespan)
     app.state.runtime = runtime
+
+    def proof_for(body: ProofIn, who: Caller) -> ApprovalProof:
+        """Bind the proof to what the Core can verify about the caller (SECURITY.md §2 rule 1)."""
+        strong = body.method in (
+            ProofMethod.PASSKEY,
+            ProofMethod.BIOMETRIC,
+            ProofMethod.HARDWARE_KEY,
+        )
+        if strong and not who.may_prove_strongly:
+            raise HTTPException(
+                403, "a strong proof needs a signed, trusted device or the local owner"
+            )
+        if body.method is ProofMethod.UI_CONFIRM and not (who.local or who.trusted):
+            raise HTTPException(403, "ui_confirm needs an unlocked trusted device")
+        proof = body.to_proof()
+        return ApprovalProof(
+            method=proof.method,
+            subject=proof.subject,
+            device_id=who.device_id(proof.device_id),
+            device_trusted=who.effective_trust(proof.device_trusted),
+            reference=proof.reference,
+        )
+
+    def owner_only(who: Caller) -> None:
+        if not (who.local or (who.signed and who.trusted)):
+            raise HTTPException(403, "only the local owner or a trusted device may do this")
 
     # -- health / events -----------------------------------------------------------------------
 
     @app.get("/health")
     def health() -> dict[str, Any]:
         return runtime.health()
+
+    @app.get("/presence")
+    def presence() -> dict[str, Any]:
+        return runtime.presence.snapshot()
+
+    @app.get("/home")
+    async def home() -> dict[str, Any]:
+        """Rooms, devices and the home state (read-only; actions go through the gate)."""
+        if runtime.home is None:
+            return {"enabled": False}
+        try:
+            online = await runtime.home.sync()
+        except HomeUnavailable:
+            online = False
+        return {"enabled": True, "online": online, **runtime.home.snapshot()}
 
     @app.get("/events")
     def events(
@@ -136,15 +329,49 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
     # -- commands ------------------------------------------------------------------------------
 
     @app.post("/commands")
-    async def commands(body: CommandIn) -> dict[str, Any]:
+    async def commands(body: CommandIn, who: CallerDep) -> dict[str, Any]:
         return await run_text_command(
             runtime,
             body.text,
             user_id=body.user_id,
-            device_id=body.device_id,
-            device_trusted=body.device_trusted,
+            device_id=who.device_id(body.device_id),
+            device_trusted=who.effective_trust(body.device_trusted),
             source="core-api",
         )
+
+    @app.post("/satellite/command")
+    async def satellite_command(body: SatelliteIn, who: CallerDep) -> dict[str, Any]:
+        """Voice satellite (e.g. Home Assistant Assist 'Hey Jarvis'): final transcript in,
+        short spoken answer out. The satellite is a device like any other: voice can never
+        satisfy a P3+ approval, and it is untrusted unless the owner enrolled it."""
+        dev = who.device_id(f"satellite:{body.satellite_id}")
+        trusted = who.effective_trust(body.device_trusted)
+        if (
+            runtime.privacy.state.satellites_paused
+            and runtime.intents.route(body.text).kind != "stop"
+        ):
+            return {
+                "status": "paused",
+                "speech": f"Privacy mode is {runtime.privacy.mode}. Voice satellites are paused.",
+                "device_id": dev,
+            }
+        ev = dict(correlation_id="voice", user_id=body.user_id, device_id=dev)
+        await runtime.bus.publish(
+            Event.new("voice.transcript", "satellite", {"text": body.text, "final": True}, **ev)
+        )
+        await runtime.bus.publish(Event.new("voice.thinking", "satellite", {}, **ev))
+        result = await run_text_command(
+            runtime,
+            body.text,
+            user_id=body.user_id,
+            device_id=dev,
+            device_trusted=trusted,
+            source="satellite",
+        )
+        speech = spoken_summary(result)
+        await runtime.bus.publish(Event.new("voice.speaking", "satellite", {"text": speech}, **ev))
+        await runtime.bus.publish(Event.new("voice.idle", "satellite", {}, **ev))
+        return {**result, "speech": speech, "device_id": dev}
 
     # -- missions ------------------------------------------------------------------------------
 
@@ -159,6 +386,333 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         except MissionNotFound:
             raise HTTPException(404, "mission not found") from None
 
+    @app.post("/missions/{mission_id}/handover")
+    async def mission_handover(mission_id: str, body: HandoverIn, who: CallerDep) -> dict[str, Any]:
+        """Desktop <-> mobile handover (SPEC §10): the mission stays one object in the Core;
+        only the responsible device changes (visible in presence and the mission checkpoints)."""
+        owner_only(who)
+        try:
+            m = runtime.missions.get(mission_id)
+        except MissionNotFound:
+            raise HTTPException(404, "mission not found") from None
+        target = runtime.devices.get(body.to_device_id)
+        if target is not None and target.revoked:
+            raise HTTPException(409, "target device is revoked")
+        to_device = target.device_id if target else body.to_device_id
+        from_device = who.device_id(m.device_id)
+        payload = {
+            "from_device": from_device,
+            "to_device": to_device,
+            "status": m.status.value,
+            "note": body.note,
+            "by": who.device_id("local"),
+        }
+        try:
+            await runtime.missions.checkpoint(mission_id, {"handover": payload})
+        except InvalidTransition as exc:
+            raise HTTPException(409, str(exc)) from None
+        await runtime.bus.publish(
+            Event.new(
+                "mission.handover",
+                "core-api",
+                payload,
+                correlation_id=mission_id,
+                user_id=m.owner,
+                device_id=to_device,
+                priority=Priority.URGENT
+                if m.status is MissionStatus.WAITING_FOR_APPROVAL
+                else Priority.NORMAL,
+            )
+        )
+        return {"mission": runtime.missions.get(mission_id).to_dict(), "handover": payload}
+
+    # -- news / globe (SPEC §13) ---------------------------------------------------------------
+
+    @app.get("/news")
+    def news_list(
+        country: str | None = None,
+        topic: str | None = None,
+        limit: int = Query(50, ge=1, le=500),
+        forecasts: bool = True,
+    ) -> dict[str, Any]:
+        if runtime.news is None:
+            return {"enabled": False, "events": [], "count": 0}
+        events = runtime.news.store.recent(
+            limit=limit, country=country, topic=topic, include_forecasts=forecasts
+        )
+        return {"enabled": True, "count": len(events), "events": [e.to_dict() for e in events]}
+
+    @app.get("/news/countries")
+    def news_countries() -> dict[str, Any]:
+        from core.news import COUNTRIES
+
+        counts = runtime.news.store.by_country() if runtime.news else {}
+        return {
+            "enabled": runtime.news is not None,
+            "countries": [
+                {**vars(c), "aliases": None, "count": counts.get(iso, 0)}
+                for iso, c in COUNTRIES.items()
+            ],
+        }
+
+    @app.get("/news/{event_id}")
+    def news_get(event_id: str) -> dict[str, Any]:
+        ev = runtime.news.store.get(event_id) if runtime.news else None
+        if ev is None:
+            raise HTTPException(404, "news event not found")
+        return ev.to_dict()
+
+    @app.post("/news/refresh")
+    async def news_refresh(who: CallerDep) -> dict[str, Any]:
+        if runtime.news is None:
+            raise HTTPException(409, "news is disabled (JARVIS_NEWS=off)")
+        res = await runtime.executor.run(
+            "news.refresh",
+            {},
+            actor=f"owner:{who.device_id('api') or 'api'}",
+            correlation_id="news",
+            device_id=who.device_id(None),
+            device_trusted=who.effective_trust(True),
+        )
+        if not res.invocation.ok:
+            raise HTTPException(502, res.invocation.error or "refresh failed")
+        return res.invocation.result or {}
+
+    @app.post("/telemetry")
+    async def telemetry(body: TelemetryIn, who: CallerDep) -> dict[str, Any]:
+        """HUD frame/input timings (PERFORMANCE.md §5) - persisted like every other measurement."""
+        budget = {
+            "hud_frame": 16.7,
+            "globe_frame": 16.7,
+            "hud_input": 100.0,
+            "hud_mode_switch": 300.0,
+        }[body.point]
+        await runtime.bus.publish(
+            Event.new(
+                "telemetry.latency",
+                "hud",
+                {
+                    "point": body.point,
+                    "ms": round(body.ms, 2),
+                    "samples": body.samples,
+                    "budget_ms": budget,
+                    "within_budget": body.ms <= budget,
+                },
+                correlation_id="telemetry",
+                device_id=who.device_id(body.device_id),
+            )
+        )
+        return {"ok": True, "within_budget": body.ms <= budget}
+
+    # -- proactivity (SPEC §14/§15): schedule, suggestions, brief, privacy ----------------------
+
+    @app.get("/schedule")
+    def schedule_list() -> dict[str, Any]:
+        return runtime.scheduler.snapshot()
+
+    @app.post("/schedule")
+    async def schedule_add(body: JobIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        from core.scheduler import Job
+
+        try:
+            job = runtime.scheduler.add(
+                Job(
+                    name=body.name,
+                    kind=body.kind,
+                    text=body.text,
+                    capability=body.capability,
+                    args=body.args,
+                    every_s=body.every_s,
+                    at=body.at,
+                    weekdays=tuple(body.weekdays) if body.weekdays is not None else None,
+                    max_runs=body.max_runs,
+                    budget_s=body.budget_s,
+                    created_by=who.device_id("local") or "local",
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        await runtime.bus.publish(
+            Event.new(
+                "job.created",
+                "core-api",
+                {"job": job.to_dict()},
+                correlation_id=f"job:{job.job_id}",
+            )
+        )
+        return job.to_dict()
+
+    @app.post("/schedule/{job_id}/{action}")
+    async def schedule_action(job_id: str, action: str, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        job = runtime.scheduler.store.get(job_id)
+        if job is None:
+            raise HTTPException(404, "job not found")
+        if action == "run":
+            return await runtime.scheduler.run_job(job)
+        if action in ("enable", "disable"):
+            job.enabled = action == "enable"
+            if job.enabled and job.next_run_at is None:
+                job.next_run_at = job.compute_next(job.created_at)
+            runtime.scheduler.store.save(job)
+            return job.to_dict()
+        if action == "delete":
+            runtime.scheduler.store.delete(job_id)
+            await runtime.bus.publish(
+                Event.new(
+                    "job.deleted",
+                    "core-api",
+                    {"job": job.to_dict()},
+                    correlation_id=f"job:{job_id}",
+                )
+            )
+            return {"deleted": True}
+        raise HTTPException(400, "action must be run|enable|disable|delete")
+
+    @app.get("/suggestions")
+    def suggestions_list(status: str | None = None) -> list[dict[str, Any]]:
+        return [s.to_dict() for s in runtime.habits.store.list(status)]
+
+    @app.post("/suggestions/scan")
+    async def suggestions_scan(who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        created = await runtime.habits.scan()
+        return {"created": [s.to_dict() for s in created]}
+
+    @app.post("/suggestions/{suggestion_id}/{action}")
+    async def suggestions_action(suggestion_id: str, action: str, who: CallerDep) -> dict[str, Any]:
+        """Accept turns a suggestion into a job (plus a P0 preload job when one exists);
+        dismiss silences it. JARVIS never activates a routine on its own (SPEC §15)."""
+        owner_only(who)
+        from datetime import UTC, datetime
+
+        from core.scheduler import Job
+
+        s = runtime.habits.store.get(suggestion_id)
+        if s is None:
+            raise HTTPException(404, "suggestion not found")
+        if s.status != "pending":
+            raise HTTPException(409, f"suggestion is already {s.status}")
+        if action not in ("accept", "dismiss"):
+            raise HTTPException(400, "action must be accept|dismiss")
+        s.status = "accepted" if action == "accept" else "dismissed"
+        s.updated_at = datetime.now(UTC)
+        created_jobs = []
+        if action == "accept":
+            job = runtime.scheduler.add(
+                Job(
+                    name=f"routine: {s.command}",
+                    kind="command",
+                    text=s.command,
+                    at=s.at,
+                    weekdays=s.weekdays,
+                    source="suggestion",
+                    created_by=who.device_id("local") or "local",
+                )
+            )
+            s.job_id = job.job_id
+            created_jobs.append(job.to_dict())
+            pre = runtime.habits.preload_for(s)
+            if pre is not None and pre[0] in runtime.capabilities:
+                try:
+                    pj = runtime.scheduler.add(
+                        Job(
+                            name=f"preload: {pre[0]} before {s.at}",
+                            kind="capability",
+                            capability=pre[0],
+                            args=pre[1],
+                            at=pre[2],
+                            weekdays=s.weekdays,
+                            source="preload",
+                            created_by="system",
+                        )
+                    )
+                    created_jobs.append(pj.to_dict())
+                except ValueError:
+                    pass  # not P0 -> no automatic preparation
+        runtime.habits.store.save(s)
+        await runtime.bus.publish(
+            Event.new(
+                f"automation.{s.status}",
+                "core-api",
+                {**s.to_dict(), "jobs": created_jobs, "by": who.device_id("local")},
+                correlation_id="proactive",
+            )
+        )
+        return {"suggestion": s.to_dict(), "jobs": created_jobs}
+
+    @app.get("/brief")
+    def brief_latest() -> dict[str, Any]:
+        rows = runtime.bus.replay(type_prefix="brief.ready")
+        return rows[-1][1].payload if rows else {"text": None, "sections": []}
+
+    @app.post("/brief")
+    async def brief_generate(who: CallerDep) -> dict[str, Any]:
+        res = await runtime.executor.run(
+            "brief.generate",
+            {"reason": "requested"},
+            actor=f"owner:{who.device_id('api') or 'api'}",
+            correlation_id="brief",
+            device_id=who.device_id(None),
+            device_trusted=who.effective_trust(True),
+        )
+        return res.invocation.result or {}
+
+    @app.get("/privacy")
+    def privacy_get() -> dict[str, Any]:
+        return runtime.privacy.state.to_dict()
+
+    # -- skill factory (SPEC §15) ----------------------------------------------------------------
+
+    async def _skill_call(who: Caller, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        res = await runtime.executor.run(
+            name,
+            args,
+            actor=f"owner:{who.device_id('api') or 'api'}",
+            correlation_id="skills",
+            device_id=who.device_id(None),
+            device_trusted=who.effective_trust(True),
+        )
+        inv, ver = res.invocation, res.verification
+        out = {"invocation": inv.to_dict(), "verification": ver.to_dict()}
+        if inv.status is InvocationStatus.AWAITING_APPROVAL:
+            return {**out, "status": "waiting_for_approval", "decision_id": inv.decision_id}
+        if res.ok:
+            return {**out, "status": "completed", "result": inv.result}
+        return {**out, "status": inv.status.value, "error": inv.error or ver.reason}
+
+    @app.get("/skills")
+    def skills_list() -> dict[str, Any]:
+        items = runtime.skills.list()
+        return {"skills": items, "count": len(items), "root": str(runtime.skills.root)}
+
+    @app.post("/skills/review")
+    async def skills_review(body: SkillPathIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        return await _skill_call(
+            who, "skill.review", {"path": body.path, "run_tests": body.run_tests}
+        )
+
+    @app.post("/skills/install")
+    async def skills_install(body: SkillPathIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        return await _skill_call(
+            who, "skill.install", {"path": body.path, "skip_tests": body.skip_tests}
+        )
+
+    @app.post("/skills/{name}/{action}")
+    async def skills_action(name: str, action: str, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        if action not in ("enable", "disable", "rollback"):
+            raise HTTPException(400, "action must be enable|disable|rollback")
+        return await _skill_call(who, f"skill.{action}", {"name": name})
+
+    @app.get("/notifications")
+    def notifications(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:
+        rows = runtime.store.replay(type_prefix="notify", limit=5000)
+        return [_row(seq, ev) for seq, ev in rows][-limit:]
+
     # -- approvals -----------------------------------------------------------------------------
 
     @app.get("/approvals")
@@ -166,9 +720,9 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return [d.to_dict() for d in runtime.permissions.pending()]
 
     @app.post("/approvals/{decision_id}/approve")
-    async def approve(decision_id: str, body: ProofIn) -> dict[str, Any]:
+    async def approve(decision_id: str, body: ProofIn, who: CallerDep) -> dict[str, Any]:
         try:
-            decision = await runtime.permissions.approve(decision_id, body.to_proof())
+            decision = await runtime.permissions.approve(decision_id, proof_for(body, who))
         except ApprovalError as exc:
             raise HTTPException(409, str(exc)) from None
         pending = runtime.pending_commands.pop(decision_id, None)
@@ -187,7 +741,8 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return {"decision": decision.to_dict(), "resumed": False}
 
     @app.post("/approvals/{decision_id}/deny")
-    async def deny(decision_id: str, body: DenyIn) -> dict[str, Any]:
+    async def deny(decision_id: str, body: DenyIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)  # deny is final for the mission: not for anonymous remote callers
         try:
             decision = await runtime.permissions.deny(decision_id, body.reason)
         except ApprovalError as exc:
@@ -205,12 +760,85 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return {"halted": True}
 
     @app.post("/resume")
-    async def resume(body: ProofIn) -> dict[str, Any]:
+    async def resume(body: ProofIn, who: CallerDep) -> dict[str, Any]:
         try:
-            await runtime.gateway.resume(body.to_proof())
+            await runtime.gateway.resume(proof_for(body, who))
         except (ApprovalError, PolicyViolation) as exc:
             raise HTTPException(403, str(exc)) from None
         return {"halted": False}
+
+    # -- devices: enrollment, trust, revocation (Phase 9, SPEC §10) ---------------------------
+
+    async def _device_event(event_type: str, payload: dict[str, Any], device_id: str) -> None:
+        await runtime.bus.publish(
+            Event.new(
+                event_type, "core-api", payload, correlation_id="devices", device_id=device_id
+            )
+        )
+
+    @app.get("/devices")
+    def devices_list(who: CallerDep) -> dict[str, Any]:
+        return {
+            "caller": who.to_dict(),
+            "devices": [d.to_dict() for d in runtime.devices.list()],
+            "pending_enrollments": [
+                e.to_dict(with_code=False) for e in runtime.devices.pending_enrollments()
+            ],
+        }
+
+    @app.post("/devices/enroll/start")
+    async def devices_enroll_start(body: EnrollStartIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        e = runtime.devices.start_enrollment(
+            name_hint=body.name_hint,
+            type=body.type,
+            trusted=body.trusted,
+            created_by=who.device_id("local") or "local",
+        )
+        await _device_event(
+            "device.enrollment.started", e.to_dict(with_code=False), e.enrollment_id
+        )
+        return e.to_dict(with_code=True)  # the code is shown once, here, never in an event
+
+    @app.post("/devices/enroll")
+    async def devices_enroll(body: EnrollIn) -> dict[str, Any]:
+        if not valid_public_key(body.public_key):
+            raise HTTPException(400, "public_key must be a base64 raw Ed25519 public key")
+        try:
+            device = runtime.devices.complete_enrollment(
+                body.code, name=body.name, public_key=body.public_key
+            )
+        except EnrollmentError as exc:
+            await _device_event("device.enrollment.failed", {"reason": str(exc)}, "unknown")
+            raise HTTPException(403, str(exc)) from None
+        await _device_event("device.enrolled", device.to_dict(), device.device_id)
+        return device.to_dict()
+
+    @app.post("/devices/{device_id}/revoke")
+    async def devices_revoke(device_id: str, body: RevokeIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        try:
+            device = runtime.devices.revoke(device_id, body.reason)
+        except KeyError:
+            raise HTTPException(404, "device not found") from None
+        await _device_event(
+            "device.revoked", {**device.to_dict(), "by": who.device_id("local")}, device_id
+        )
+        return device.to_dict()
+
+    @app.post("/devices/{device_id}/trust")
+    async def devices_trust(device_id: str, body: TrustIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        current = runtime.devices.get(device_id)
+        if current is None:
+            raise HTTPException(404, "device not found")
+        if current.revoked:
+            raise HTTPException(409, "a revoked device cannot be trusted again; enroll anew")
+        device = runtime.devices.set_trusted(device_id, body.trusted)
+        await _device_event(
+            "device.trust.changed", {**device.to_dict(), "by": who.device_id("local")}, device_id
+        )
+        return device.to_dict()
 
     # -- memory: "What JARVIS Knows" (SPEC §8.4) -----------------------------------------------
 
@@ -303,11 +931,92 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         except KeyError:
             raise HTTPException(404, "memory not found") from None
 
+    # -- workspace views for the HUD coding mode (read-only; writes/runs go through the gate) ---
+
+    @app.get("/workspace/{mission_id}/files")
+    def workspace_files(mission_id: str) -> dict[str, Any]:
+        try:
+            files = runtime.workspaces.list(mission_id)
+        except WorkspaceError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"mission_id": mission_id, "files": files}
+
+    @app.get("/workspace/{mission_id}/file")
+    def workspace_file(mission_id: str, path: str) -> dict[str, Any]:
+        try:
+            content = runtime.workspaces.read(mission_id, path)
+        except WorkspaceError as exc:
+            raise HTTPException(404 if "no such" in str(exc) else 400, str(exc)) from None
+        return {"path": path, "content": content}
+
+    @app.put("/workspace/{mission_id}/file")
+    async def workspace_write(
+        mission_id: str, body: WorkspaceWriteIn, who: CallerDep
+    ) -> dict[str, Any]:
+        """Editor save: goes through the gate like any other write (P2, verified, evented)."""
+        try:
+            runtime.missions.get(mission_id)
+        except MissionNotFound:
+            raise HTTPException(404, "mission not found") from None
+        res = await runtime.executor.run(
+            "workspace.write",
+            {"path": body.path, "content": body.content},
+            actor=f"owner:{who.device_id(body.device_id) or 'api'}",
+            correlation_id=mission_id,
+            user_id=body.user_id,
+            device_id=who.device_id(body.device_id),
+            device_trusted=who.effective_trust(body.device_trusted),
+        )
+        inv, ver = res.invocation, res.verification
+        payload = {"path": body.path, "invocation": inv.to_dict(), "verification": ver.to_dict()}
+        if inv.status is InvocationStatus.AWAITING_APPROVAL:
+            return {**payload, "status": "waiting_for_approval", "decision_id": inv.decision_id}
+        if inv.status is InvocationStatus.FAILED and inv.error and "traversal" in inv.error:
+            raise HTTPException(400, inv.error)
+        if res.ok:
+            return {**payload, "status": "completed", "result": inv.result}
+        return {**payload, "status": inv.status.value, "error": inv.error or ver.reason}
+
+    @app.get("/workspace/{mission_id}/diff")
+    def workspace_diff(mission_id: str, path: str) -> dict[str, Any]:
+        try:
+            return {"path": path, "diff": runtime.workspaces.diff(mission_id, path)}
+        except WorkspaceError as exc:
+            raise HTTPException(404 if "no such" in str(exc) else 400, str(exc)) from None
+
+    @app.get("/workspace/{mission_id}/preview/{path:path}")
+    def workspace_preview(mission_id: str, path: str) -> Response:
+        """Serve a workspace file for the preview iframe (sandboxed CSP, no caching)."""
+        try:
+            target = runtime.workspaces.resolve(mission_id, path or "index.html", must_exist=True)
+        except WorkspaceError as exc:
+            raise HTTPException(404, str(exc)) from None
+        if target.is_dir():
+            target = target / "index.html"
+            if not target.is_file():
+                raise HTTPException(404, "no index.html")
+        media = _PREVIEW_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        headers = {
+            "Content-Security-Policy": (
+                "sandbox allow-scripts; default-src 'self' 'unsafe-inline' data: blob:"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        }
+        return Response(content=target.read_bytes(), media_type=media, headers=headers)
+
     # -- debug UI ------------------------------------------------------------------------------
 
     @app.get("/debug", response_class=HTMLResponse)
     def debug() -> str:
         return (_STATIC / "debug.html").read_text(encoding="utf-8")
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse("/hud/")
+
+    if _HUD.is_dir():
+        app.mount("/hud", StaticFiles(directory=str(_HUD), html=True), name="hud")
 
     return app
 

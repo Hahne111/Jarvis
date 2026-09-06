@@ -1,0 +1,6 @@
+# Core tests: same strict rules as core/, asserts are the test mechanism.
+extend = "../../ruff.toml"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = ["S101"]

@@ -37,6 +37,10 @@ class VerifierRegistry:
             raise ValueError(f"verifier {name!r} already registered")
         self._fns[name] = fn
 
+    def unregister(self, name: str) -> bool:
+        """Remove a verifier (skill deactivation/upgrade). Returns True when it existed."""
+        return self._fns.pop(name, None) is not None
+
     def get(self, name: str) -> VerifierFn:
         try:
             return self._fns[name]

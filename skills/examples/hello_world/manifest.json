@@ -1,0 +1,33 @@
+{
+  "name": "hello_world",
+  "version": "1.0.0",
+  "description": "Reference skill: a greeting (P0) and a counter with a verifier (P1).",
+  "author": "JARVIS project",
+  "entrypoint": "skill.py:HelloWorldSkill",
+  "uses": ["mock.clock"],
+  "tests": "tests",
+  "min_core": "0.5.0",
+  "capabilities": [
+    {
+      "name": "greet",
+      "description": "Return a greeting for a name.",
+      "risk": "P0",
+      "inputs": {"name": "string?"}
+    },
+    {
+      "name": "count",
+      "description": "Increase the skill's counter by a step (side effect inside the skill, verified).",
+      "risk": "P1",
+      "inputs": {"step": "integer?"},
+      "side_effects": true,
+      "reversible": true,
+      "verifier": "counter_is"
+    },
+    {
+      "name": "time_greeting",
+      "description": "Greeting that asks the Core for the time through the gateway (uses mock.clock).",
+      "risk": "P0",
+      "inputs": {}
+    }
+  ]
+}

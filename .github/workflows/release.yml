@@ -1,0 +1,79 @@
+name: Release
+
+# Signed release pipeline (SPEC §18, Phase 12 step 78).
+# Tag v<version> -> reproducible source archive + SHA256SUMS + Ed25519 signatures -> GitHub Release.
+# The private key lives only in the repository secret JARVIS_RELEASE_SIGNING_KEY; the matching
+# public key is committed under release/jarvis-release.pub. Without the secret the archive is
+# still built and checksummed, but not signed - and the updater will refuse to install it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (without leading v)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  regression:
+    name: Regression suite (must be green before a release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: core/requirements.txt
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r core/requirements.txt
+      - run: python -m pytest -q tests/core tests/regression
+
+  build:
+    name: Archive, checksum, sign
+    needs: [regression]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      HAS_SIGNING_KEY: ${{ secrets.JARVIS_RELEASE_SIGNING_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r core/requirements.txt
+      - name: Build reproducible archive
+        run: |
+          V="${VERSION#v}"
+          python -m core.release archive --version "$V" --out dist
+          python -m core.release sums dist/jarvis-"$V".tar.gz > dist/SHA256SUMS
+          cat dist/SHA256SUMS
+      - name: Sign (only when the owner configured the signing key)
+        if: env.HAS_SIGNING_KEY == 'true'
+        env:
+          JARVIS_RELEASE_SIGNING_KEY: ${{ secrets.JARVIS_RELEASE_SIGNING_KEY }}
+        run: |
+          V="${VERSION#v}"
+          python -m core.release sign dist/jarvis-"$V".tar.gz dist/SHA256SUMS
+          python -m core.release verify dist/jarvis-"$V".tar.gz dist/jarvis-"$V".tar.gz.sig
+      - name: Unsigned notice
+        if: env.HAS_SIGNING_KEY != 'true'
+        run: echo "::warning::JARVIS_RELEASE_SIGNING_KEY not set - release is unsigned; the updater will refuse it."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-release
+          path: dist/
+          if-no-files-found: error
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

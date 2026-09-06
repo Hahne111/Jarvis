@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<link rel="icon" href="data:,">
+<link rel="manifest" href="/hud/manifest.webmanifest">
+<meta name="theme-color" content="#0c121a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<link rel="stylesheet" href="/hud/hud.css">
+</head>
+<body data-state="idle">
+<header class="bar">
+  <div class="brand">J.A.R.V.I.S. <span class="ver" id="version"></span></div>
+  <div class="status" id="status">connecting…</div>
+  <nav class="modes" id="modes" aria-label="HUD mode">
+    <button data-mode="core" class="active">CORE</button><button data-mode="globe">GLOBE</button>
+    <button data-mode="coding">CODING</button><button data-mode="mission">MISSION</button>
+  </nav>
+  <div class="actions">
+    <button id="killBtn" class="danger" title="Stop everything">KILL SWITCH</button>
+    <button id="resumeBtn" title="Resume with passkey proof">RESUME</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="core-panel">
+    <div class="core" id="core" aria-live="polite">
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+      <div class="nucleus"></div>
+      <div class="label" id="coreLabel">IDLE</div>
+    </div>
+    <div class="core-meta">
+      <span id="coreDevice">core</span> · <span id="coreSince">—</span>
+      <span id="coreMission" class="mono"></span>
+    </div>
+    <form id="cmdForm" class="cmd" autocomplete="off">
+      <input id="cmdInput" placeholder="Say it: echo hello · clock · open vscode · stop" aria-label="Command">
+      <label><input type="checkbox" id="trusted" checked> trusted device</label>
+      <button type="submit">SEND</button>
+    </form>
+    <div class="latency" id="latency"></div>
+    <div id="homePanel" class="home" hidden>
+      <div class="home-head">HOME <span id="homeState" class="chip active"></span> <span id="homeOnline" class="muted"></span></div>
+      <div id="homeStates" class="chips"></div>
+      <div id="homeRooms" class="rooms"></div>
+    </div>
+  </section>
+
+  <section class="panel approvals">
+    <h2>APPROVALS <span class="count" id="approvalCount">0</span></h2>
+    <div id="approvals" class="list"><div class="empty">Nothing waiting for you.</div></div>
+  </section>
+
+  <section class="panel rail">
+    <h2>EVENT RAIL
+      <select id="railFilter" aria-label="Filter">
+        <option value="">all</option><option value="presence">presence</option><option value="voice">voice</option>
+        <option value="mission">mission</option><option value="agent">agents</option><option value="permission">permissions</option>
+        <option value="capability">capabilities</option><option value="verification">verification</option>
+        <option value="memory">memory</option><option value="telemetry">telemetry</option>
+      </select>
+    </h2>
+    <div id="rail" class="list rail-list"></div>
+  </section>
+
+  <section class="panel missions">
+    <h2><nav class="tabs" id="missionTabs"><button data-tab="missions" class="active">MISSIONS</button><button data-tab="devices">DEVICES</button><button data-tab="proactive">PROACTIVE</button></nav>
+      <button id="enrollBtn" class="primary" hidden title="Mint a one-time enrollment code for a new device">ENROLL</button></h2>
+    <div id="missions" class="list" data-tab="missions"></div>
+    <div id="devices" class="list" data-tab="devices" hidden></div>
+    <div id="proactive" class="list" data-tab="proactive" hidden></div>
+    <form id="thisDevice" class="this-device" data-tab="devices" hidden autocomplete="off">
+      <span id="thisDeviceInfo" class="muted">this device is not enrolled</span>
+      <input id="enrollCode" placeholder="code" maxlength="8" aria-label="Enrollment code">
+      <input id="enrollName" placeholder="device name" maxlength="60" aria-label="Device name">
+      <button type="submit" class="primary" id="enrollThisBtn">ENROLL THIS DEVICE</button>
+      <button type="button" id="forgetKeyBtn" hidden>forget key</button>
+    </form>
+  </section>
+
+  <section class="panel memory">
+    <h2>WHAT JARVIS KNOWS <input id="memQuery" placeholder="search…" aria-label="Search memory"></h2>
+    <div id="memory" class="list"></div>
+  </section>
+
+  <section class="panel globe" id="globePanel" hidden>
+    <h2>WORLD INTELLIGENCE
+      <select id="globeTopic" aria-label="Topic layer"><option value="">all topics</option><option value="ai">ai</option><option value="tech">tech</option><option value="politics">politics</option><option value="economy">economy</option><option value="security">security</option><option value="climate">climate</option><option value="health">health</option><option value="science">science</option><option value="sports">sports</option></select>
+      <span id="globeInfo" class="info"></span>
+      <button id="newsRefreshBtn" class="primary" title="news.refresh through the gate">REFRESH</button>
+    </h2>
+    <div class="globe-body">
+      <canvas id="globeCanvas" aria-label="World globe"></canvas>
+      <div class="globe-side">
+        <div class="globe-head" id="countryTitle">Select a country or wait for the globe to turn.</div>
+        <div id="countryCards" class="list cards"></div>
+        <div class="globe-head">EVIDENCE</div>
+        <div id="evidenceRail" class="list evidence"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel coding" id="codingPanel">
+    <h2>CODING
+      <select id="codingMission" aria-label="Mission workspace"></select>
+      <nav class="tabs" id="codingTabs">
+        <button data-tab="files" class="active">EDITOR</button><button data-tab="diff">DIFF</button>
+        <button data-tab="terminal">TERMINAL</button><button data-tab="preview">PREVIEW</button>
+        <button data-tab="agents">AGENTS</button><button data-tab="quality">QUALITY</button>
+        <button data-tab="artifacts">ARTIFACTS</button>
+      </nav>
+      <span id="editorInfo" class="info"></span>
+      <button id="saveBtn" class="primary" title="Write through the core (workspace.write, verified)" disabled>SAVE</button>
+    </h2>
+    <div class="coding-body">
+      <div id="fileTree" class="list tree"></div>
+      <div class="coding-main">
+        <div id="codeView" class="code editor" data-tab="files" data-editor="textarea"><textarea id="codeArea" spellcheck="false" placeholder="Select a file…" aria-label="Editor"></textarea></div>
+        <pre id="diffView" class="code" data-tab="diff" hidden><code>No diff yet.</code></pre>
+        <pre id="terminalView" class="code term" data-tab="terminal" hidden><code></code></pre>
+        <iframe id="previewFrame" data-tab="preview" hidden sandbox="allow-scripts" title="Preview" referrerpolicy="no-referrer"></iframe>
+        <div id="agentRail" class="list rows" data-tab="agents" hidden></div>
+        <div id="qualityView" class="list rows" data-tab="quality" hidden></div>
+        <div id="artifactView" class="list rows" data-tab="artifacts" hidden></div>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/hud/hud.js"></script>
+</body>
+</html>

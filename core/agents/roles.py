@@ -23,6 +23,8 @@ class Role:
     prompt: str  # appended to the system prompt of the sub-run
     max_risk: RiskLevel  # tools above this risk are not offered to the sub-run
     path: Path = Path.SMART
+    extra_tools: frozenset[str] = frozenset()  # offered regardless of risk (still gated)
+    run_commands: frozenset[str] | None = None  # workspace.run commands this role may use
 
     def filter_allowlist(
         self, allowlist: frozenset[str], capabilities: CapabilityRegistry
@@ -30,8 +32,12 @@ class Role:
         return frozenset(
             n
             for n in allowlist
-            if n in capabilities and capabilities.get(n).manifest.risk <= self.max_risk
+            if n in capabilities
+            and (capabilities.get(n).manifest.risk <= self.max_risk or n in self.extra_tools)
         )
+
+    def allows_run(self, command: str) -> bool:
+        return self.run_commands is None or command in self.run_commands
 
 
 ROLES: dict[str, Role] = {
@@ -49,7 +55,9 @@ ROLES: dict[str, Role] = {
             "implementation",
             "carry out a concrete, well-specified sub-task with the allowed tools",
             "You are the implementation subagent. Do exactly the sub-task you were given with the "
-            "allowed tools, then report what you did and what the tool results said.",
+            "allowed tools, then report what you did and what the tool results said. For code: "
+            "write files with workspace.write, then run the tests with workspace.run before you "
+            "report; a task is not done until its run is verified green.",
             RiskLevel.P6,  # bounded by the mission allowlist and the permission engine, not by role
             Path.DEEP,
         ),
@@ -57,9 +65,12 @@ ROLES: dict[str, Role] = {
             "test",
             "exercise a result and report whether it behaves as specified",
             "You are the test subagent. Check the given result against its specification using "
-            "reversible tools only and report pass/fail with evidence.",
+            "reversible tools only and report pass/fail with evidence. In a workspace you may "
+            "only run the test suite (pytest / python -m pytest), never other commands.",
             RiskLevel.P2,
             Path.SMART,
+            extra_tools=frozenset({"workspace.run"}),
+            run_commands=frozenset({"pytest", "python"}),
         ),
         Role(
             "verification",

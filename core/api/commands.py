@@ -86,6 +86,29 @@ async def run_text_command(
     return await execute_call(runtime, mid, call)
 
 
+def spoken_summary(result: dict[str, Any]) -> str:
+    """Short, filler-free sentence a voice satellite can speak for a command result
+    (SpokenStyle contract: state the outcome, name the next step, never pretend success)."""
+    if result.get("route") == "stop":
+        return "Stopped."
+    status = result.get("status")
+    if status == "completed":
+        text = result.get("result")
+        if isinstance(text, str) and text.strip():
+            return text.strip()[:240]
+        return "Done."
+    if status == "waiting_for_approval":
+        return "That needs your confirmation on the HUD or your phone."
+    if status == "halted":
+        return "Everything is stopped. Resume with a passkey."
+    if status == "blocked":
+        return "I can't do that without an intelligence provider."
+    if status == "failed":
+        err = str(result.get("error") or "").split("\n")[0][:120]
+        return f"That didn't work. {err}".strip()
+    return "Done."
+
+
 async def safe_transition(runtime: CoreRuntime, mid: str, to: MissionStatus, reason: str) -> None:
     try:
         await runtime.missions.transition(mid, to, reason=reason)

@@ -18,6 +18,7 @@ class RunOutcome(StrEnum):
     REFUSED = "refused"
     HALTED = "halted"
     FAILED = "failed"
+    NOT_VERIFIED = "not_verified"  # the model said done, but no verified green run backs it
 
 
 @dataclass

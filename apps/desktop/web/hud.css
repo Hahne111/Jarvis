@@ -1,0 +1,103 @@
+/* JARVIS HUD – design tokens (SPEC §3: dark command center, amber + cyan, central core) */
+:root{
+  --bg:#070a0f; --panel:#0c121a; --line:#182634; --text:#cfe3ee; --muted:#7d93a4;
+  --cyan:#57d7ff; --cyan-dim:#1b5f78; --amber:#ffb454; --amber-dim:#7a4f14; --red:#ff5c5c; --green:#5be3c0; --violet:#c792ea;
+  --mono:ui-monospace,Menlo,Consolas,monospace; --sans:"Rajdhani","Segoe UI",system-ui,sans-serif;
+}
+*{box-sizing:border-box} html,body{height:100%}
+body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#0f1a26 0%,var(--bg) 60%);color:var(--text);font:15px/1.4 var(--sans);overflow:hidden}
+.bar{display:flex;align-items:center;gap:16px;height:48px;padding:0 16px;border-bottom:1px solid var(--line);background:rgba(12,18,26,.85);backdrop-filter:blur(6px)}
+.brand{font-weight:700;letter-spacing:.18em;color:var(--amber)} .ver{color:var(--muted);font-weight:400;letter-spacing:0;font-size:12px}
+.status{color:var(--muted);font-family:var(--mono);font-size:12px} .actions{margin-left:auto;display:flex;gap:8px}
+button{background:#111a24;color:var(--text);border:1px solid #27394a;padding:6px 12px;font:600 12px var(--sans);letter-spacing:.08em;cursor:pointer;border-radius:3px}
+button:hover{border-color:var(--cyan)} button.danger{border-color:var(--red);color:var(--red)} button.primary{border-color:var(--amber);color:var(--amber)}
+input,select{background:#0b1218;color:var(--text);border:1px solid #27394a;padding:6px 8px;font:14px var(--sans);border-radius:3px}
+.grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;grid-template-rows:1fr 1fr 1.2fr;gap:12px;padding:12px;height:calc(100% - 48px)}
+.core-panel{grid-row:1/4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(87,215,255,.04),transparent);border-radius:6px;padding:16px}
+.panel{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;min-height:0}
+.panel h2{margin:0 0 8px;font:700 12px var(--sans);letter-spacing:.16em;color:var(--muted);display:flex;align-items:center;gap:8px}
+.panel h2 .count{background:var(--amber-dim);color:var(--amber);border-radius:10px;padding:0 8px;font-size:11px}
+.panel h2 select,.panel h2 input{margin-left:auto;font-size:12px;padding:3px 6px}
+.list{overflow:auto;min-height:0;font-family:var(--mono);font-size:12px} .empty{color:var(--muted);padding:8px 0}
+.rail-list div.ev{padding:3px 0;border-bottom:1px dotted #142230;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev .t{color:var(--cyan)} .ev.presence .t{color:var(--amber)} .ev.permission .t{color:var(--amber)} .ev.capability .t{color:var(--green)}
+.ev.verification .t{color:var(--violet)} .ev.gateway .t,.ev.critical .t{color:var(--red)} .ev.memory .t{color:#9ad1ff} .ev.voice .t{color:#ffd48a} .ev .s{color:#4f6474}
+.card{border:1px solid #2b3a48;border-radius:4px;padding:8px;margin:6px 0;background:#0a1016} .card.approval{border-color:var(--amber-dim)}
+.card .row{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap} .card small{color:var(--muted)}
+.mission{display:flex;gap:8px;padding:3px 0;border-bottom:1px dotted #142230} .mission .st{width:150px;color:var(--muted)}
+.st.completed{color:var(--green)} .st.failed,.st.canceled{color:var(--red)} .st.waiting_for_approval{color:var(--amber)} .st.running,.st.verifying{color:var(--cyan)}
+.cmd{display:flex;gap:8px;width:100%;max-width:640px;align-items:center} .cmd input[type=text],.cmd #cmdInput{flex:1} .cmd label{color:var(--muted);font-size:12px;white-space:nowrap}
+.core-meta{color:var(--muted);font-size:12px;font-family:var(--mono)} .core-meta .mono{color:var(--cyan)}
+.latency{display:flex;gap:8px;flex-wrap:wrap;justify-content:center} .tile{border:1px solid var(--line);border-radius:4px;padding:4px 10px;font:12px var(--mono);color:var(--muted)}
+.tile b{color:var(--text)} .tile.over b{color:var(--red)}
+
+/* central AI core: state-driven animation (presence.changed only) */
+.core{position:relative;width:min(38vh,320px);height:min(38vh,320px);display:grid;place-items:center}
+.ring{position:absolute;inset:0;border-radius:50%;border:1px solid var(--cyan-dim);animation:spin 18s linear infinite}
+.ring.r2{inset:12%;border-style:dashed;animation-duration:12s;animation-direction:reverse} .ring.r3{inset:24%;border-color:var(--amber-dim);animation-duration:24s}
+.nucleus{width:28%;height:28%;border-radius:50%;background:radial-gradient(circle,var(--cyan) 0%,#0b6a8a 55%,transparent 72%);box-shadow:0 0 40px 6px rgba(87,215,255,.35);animation:breathe 4s ease-in-out infinite}
+.label{position:absolute;bottom:-6px;font:700 12px var(--sans);letter-spacing:.3em;color:var(--muted)}
+body[data-state=listening] .nucleus{background:radial-gradient(circle,var(--amber) 0%,#8a5a12 55%,transparent 72%);box-shadow:0 0 50px 10px rgba(255,180,84,.4);animation-duration:1.2s}
+body[data-state=thinking] .ring{animation-duration:3s} body[data-state=thinking] .ring.r2{animation-duration:2s}
+body[data-state=speaking] .nucleus{animation:pulse .6s ease-in-out infinite}
+body[data-state=working] .ring.r3{border-color:var(--cyan);animation-duration:4s}
+body[data-state=awaiting_approval] .nucleus{background:radial-gradient(circle,var(--amber) 0%,#7a4f14 60%,transparent 72%);animation:pulse 1.6s ease-in-out infinite}
+body[data-state=halted] .nucleus{background:radial-gradient(circle,var(--red) 0%,#5a1414 60%,transparent 72%);animation:none;box-shadow:0 0 30px 4px rgba(255,92,92,.4)}
+body[data-state=halted] .ring{animation-play-state:paused;border-color:#5a2a2a}
+@keyframes spin{to{transform:rotate(360deg)}} @keyframes breathe{50%{transform:scale(1.08)}} @keyframes pulse{50%{transform:scale(1.18)}}
+/* coding mode (SPEC §12.1): tree + editor/diff/terminal/preview fed only by workspace.* events */
+.coding{grid-column:2/4} .tabs{margin-left:auto;display:flex;gap:4px} .tabs button{padding:3px 8px;font-size:11px} .tabs button.active{border-color:var(--amber);color:var(--amber)}
+.coding-body{display:grid;grid-template-columns:220px 1fr;gap:10px;min-height:0;flex:1}
+.tree div{padding:2px 4px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .tree div:hover,.tree div.active{color:var(--cyan)} .tree .dir{color:var(--muted)}
+.coding-main{min-height:0;display:flex} .code{margin:0;flex:1;overflow:auto;background:#070b10;border:1px solid var(--line);border-radius:4px;padding:10px;font:12px/1.45 var(--mono);white-space:pre}
+.code.term .err{color:var(--red)} .code .add{color:var(--green)} .code .del{color:var(--red)} .code .hunk{color:var(--cyan)}
+#previewFrame{flex:1;border:1px solid var(--line);border-radius:4px;background:#fff}
+.code.editor{padding:0;display:flex} .code.editor textarea{flex:1;background:transparent;color:var(--text);border:0;outline:0;resize:none;padding:10px;font:12px/1.45 var(--mono);white-space:pre;tab-size:4}
+.code.editor .monaco-host{flex:1;min-height:0} .panel h2 .info{color:var(--muted);font:11px var(--mono);letter-spacing:0} .panel h2 #saveBtn{padding:3px 8px;font-size:11px}
+.rows{flex:1;border:1px solid var(--line);border-radius:4px;padding:6px 10px;background:#070b10} .rows .row{display:flex;gap:10px;padding:3px 0;border-bottom:1px dotted #142230;align-items:center}
+.rows .ok{color:var(--green)} .rows .bad{color:var(--red)} .rows .wait{color:var(--amber)} .rows .role{color:var(--cyan);min-width:110px} .rows .sub{padding-left:18px} .rows .muted{color:var(--muted)} .rows button{padding:1px 6px;font-size:10px}
+@media (prefers-reduced-motion:reduce){.ring,.nucleus{animation:none!important}}
+@media (max-width:1100px){.grid{grid-template-columns:1fr 1fr;grid-template-rows:auto}.core-panel{grid-row:auto;grid-column:1/3}}
+/* home (SPEC §11): state chips + rooms, fed by GET /home and home.* events; actions go via /commands */
+.home{width:100%;max-width:640px;font:12px var(--mono);color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+.home-head{display:flex;gap:8px;align-items:center;letter-spacing:.16em;font:700 12px var(--sans);color:var(--muted);margin-bottom:6px}
+.chips{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px} .chip{border:1px solid #27394a;border-radius:10px;padding:1px 8px;font:11px var(--mono);color:var(--text);cursor:pointer;letter-spacing:0}
+.chip.active{border-color:var(--amber);color:var(--amber)} .rooms{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;max-height:22vh;overflow:auto}
+.rooms .room{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:2px 0;border-bottom:1px dotted #142230} .rooms .room b{color:var(--cyan);font-weight:600;min-width:90px}
+.rooms .dev{border:1px solid #27394a;border-radius:3px;padding:0 6px;font-size:11px;color:var(--text);cursor:pointer} .rooms .dev.on{border-color:var(--green);color:var(--green)}
+.rooms .dev.p4{cursor:default;color:var(--amber);border-color:var(--amber-dim)} .rooms .dev.p4::after{content:" P4";color:var(--muted)}
+/* devices (SPEC §10): enrolled devices, trust and revocation; the enrollment code is shown once */
+.missions h2 .tabs{margin-left:0} .missions h2 #enrollBtn{margin-left:auto;padding:3px 8px;font-size:11px}
+.dev-row{display:flex;gap:8px;align-items:center;padding:3px 0;border-bottom:1px dotted #142230} .dev-row .t{color:var(--muted);min-width:60px} .dev-row .n{flex:1}
+.dev-row .trusted{color:var(--green)} .dev-row .untrusted{color:var(--amber)} .dev-row .revoked{color:var(--red);text-decoration:line-through} .dev-row button{padding:1px 6px;font-size:10px}
+.enroll-code{border:1px solid var(--amber-dim);border-radius:4px;padding:8px;margin:6px 0;background:#0a1016;color:var(--amber);font:16px var(--mono);letter-spacing:.2em}
+.enroll-code small{display:block;color:var(--muted);letter-spacing:0;font:11px var(--mono);margin-top:4px}
+/* this device: browser-held Ed25519 key (WebCrypto, IndexedDB); enrollment needs https or localhost */
+.this-device{display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:6px;margin-top:6px;font:11px var(--mono)} .this-device input{width:110px;font-size:12px;padding:3px 6px} .this-device button{padding:3px 8px;font-size:11px}
+/* mobile (Phase 9 step 57): one column, touch targets, the core first, panels stacked; PWA standalone */
+@media (max-width:760px){
+  html,body{height:auto} body{overflow:visible} .bar{position:sticky;top:0;z-index:2;height:44px;gap:8px;padding:0 10px} .panel,.panel h2,.core-panel{scroll-margin-top:52px} .brand{font-size:14px;letter-spacing:.12em} .status{display:none}
+  .grid{display:flex;flex-direction:column;gap:10px;padding:10px;height:auto} .core-panel{order:0;padding:10px;gap:10px} .core{width:min(48vw,200px);height:min(48vw,200px)}
+  .panel.approvals{order:1} .panel.missions{order:2} .panel.rail{order:5;max-height:40vh} .panel.memory{order:4} .panel.coding{order:6;grid-column:auto} .panel{min-height:120px;max-height:60vh}
+  .coding-body{grid-template-columns:1fr;grid-template-rows:120px 1fr} .rooms{grid-template-columns:1fr;max-height:40vh}
+  button,.chip,.dev,.tabs button{min-height:36px;padding:6px 10px;font-size:12px} .cmd{flex-wrap:wrap} .cmd #cmdInput{flex:1 1 100%;min-height:40px;font-size:16px} input,select{font-size:16px}
+  .card .row button{flex:1 1 30%} .latency{display:none} .home{max-width:none}
+}
+/* scene manager (SPEC §3.2): body[data-mode] picks the adaptive layout; transitions stay cheap (opacity/transform) */
+.modes{display:flex;gap:4px;margin-left:12px} .modes button{padding:4px 10px;font-size:11px} .modes button.active{border-color:var(--amber);color:var(--amber)}
+.panel,.core-panel{transition:opacity .25s ease,transform .25s ease} .panel[hidden]{display:none}
+body[data-mode=globe] .panel.globe{display:flex;grid-column:2/4;grid-row:1/3} body[data-mode=globe] .panel.approvals,body[data-mode=globe] .panel.rail,body[data-mode=globe] .panel.missions,body[data-mode=globe] .panel.memory{display:none}
+body[data-mode=globe] .panel.coding{display:none} body[data-mode=globe] .panel.rail{display:flex;grid-column:2/4;grid-row:3/4}
+body[data-mode=coding] .panel.coding{grid-column:2/4;grid-row:1/4} body[data-mode=coding] .panel.approvals,body[data-mode=coding] .panel.rail,body[data-mode=coding] .panel.missions,body[data-mode=coding] .panel.memory{display:none}
+body[data-mode=mission] .panel.coding{display:none} body[data-mode=mission] .panel.missions{grid-column:2/4;grid-row:1/3} body[data-mode=mission] .panel.approvals{grid-column:2/3;grid-row:3/4} body[data-mode=mission] .panel.rail{grid-column:3/4;grid-row:3/4} body[data-mode=mission] .panel.memory{display:none}
+/* globe panel */
+.globe-body{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;min-height:0;flex:1} #globeCanvas{width:100%;height:100%;min-height:260px;border:1px solid var(--line);border-radius:6px;background:radial-gradient(600px 400px at 50% 40%,#0c1a26,#070a0f);cursor:grab;touch-action:none}
+.globe-side{display:flex;flex-direction:column;min-height:0;gap:6px} .globe-head{font:700 11px var(--sans);letter-spacing:.16em;color:var(--muted)} .cards{flex:2;overflow:auto} .evidence{flex:1;overflow:auto;border-top:1px solid var(--line);padding-top:4px}
+.card.news{border-color:#1e3242} .card.news .t{color:var(--text);font:600 13px var(--sans)} .card.news .m{color:var(--muted);font-size:11px;margin-top:2px} .card.news .conf{height:3px;background:#142230;border-radius:2px;margin-top:6px} .card.news .conf i{display:block;height:3px;background:var(--cyan);border-radius:2px}
+.badge{border:1px solid var(--amber-dim);color:var(--amber);border-radius:3px;padding:0 5px;font-size:10px;margin-left:6px} .badge.forecast{border-color:#3a4a5a;color:var(--muted)} .badge.breaking{border-color:var(--red);color:var(--red)}
+.evidence .src{display:flex;gap:8px;padding:2px 0;border-bottom:1px dotted #142230;font-size:11px} .evidence .src .q{color:var(--green);min-width:38px} .evidence .src a{color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:760px){.modes{margin-left:auto} .globe-body{grid-template-columns:1fr;grid-template-rows:260px 1fr} body[data-mode=globe] .panel.globe{order:1}}
+/* proactive (SPEC §14/§15): suggestions are proposed, never activated; jobs and the brief come from persisted state */
+.pro-head{display:flex;gap:8px;align-items:center;margin:6px 0 2px;font:700 11px var(--sans);letter-spacing:.16em;color:var(--muted)} .pro-head .chip{margin-left:auto}
+.pro-row{display:flex;gap:8px;align-items:center;padding:3px 0;border-bottom:1px dotted #142230} .pro-row .n{flex:1} .pro-row .when{color:var(--amber);min-width:52px} .pro-row button{padding:1px 6px;font-size:10px}
+.pro-row.off .n{color:var(--muted);text-decoration:line-through} .brief-text{white-space:pre-wrap;color:var(--text);font:12px/1.5 var(--sans);padding:4px 0}

@@ -76,7 +76,7 @@ def test_plain_answer_completes_without_tools(tmp_path):
         "agent.delegate",
     ]
     assert "JARVIS Core" in provider.calls[0]["system"]
-    assert types(rt, m.mission_id)[-3:] == [
+    assert [t for t in types(rt, m.mission_id) if not t.startswith("presence.")][-3:] == [
         "agent.run.started",
         "agent.run.step",
         "agent.run.finished",
