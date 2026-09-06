@@ -139,6 +139,17 @@ _TOPIC_WORDS = {
     "sports": "sports",
     "sport": "sports",
 }
+_BRIEF = re.compile(
+    r"^\s*((daily|morning|tages)[- ]?(brief(ing)?)|briefing|brief me|was liegt an|what'?s up today|"
+    r"was steht heute an)\s*[?.!]?\s*$",
+    re.I,
+)
+_PRIVACY = re.compile(
+    r"^\s*((privacy|privat)[- ]?(mode|modus)\s*(?P<onoff>on|off|an|aus|ein)"
+    r"|(guest|gäste|gaeste)[- ]?(mode|modus)\s*(?P<gonoff>on|off|an|aus|ein)?"
+    r"|(?P<normal>normal(er)? (mode|modus)|privacy off|privatmodus aus))\s*[?.!]?\s*$",
+    re.I,
+)
 _WINDOWS = re.compile(
     r"^\s*(list|show|zeige?)( the| die| alle)?( open| offenen)? (windows|fenster)\s*[?.]?\s*$", re.I
 )
@@ -167,6 +178,16 @@ class IntentRouter:
             )
         if (home := self._home_intent(text)) is not None:
             return home
+        if _BRIEF.match(text) and "brief.generate" in self._caps:
+            return Intent("capability", "brief.generate", {"reason": "voice"}, text=text)
+        if (m := _PRIVACY.match(text)) and "privacy.set" in self._caps:
+            if m.group("normal") or (m.group("onoff") or "").lower() in ("off", "aus"):
+                mode = "normal"
+            elif m.group("onoff"):
+                mode = "private"
+            else:
+                mode = "normal" if (m.group("gonoff") or "").lower() in ("off", "aus") else "guest"
+            return Intent("capability", "privacy.set", {"mode": mode}, text=text)
         if (m := _NEWS.match(text)) and "news.top" in self._caps:
             args: dict[str, Any] = {}
             topic = (m.group("topic") or "").strip().lower()

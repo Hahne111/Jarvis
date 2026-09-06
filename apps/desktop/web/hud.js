@@ -141,6 +141,7 @@ function ingest(e) {
   }
   if (e.type.startsWith("mission.") || e.type.startsWith("permission.") || e.type.startsWith("memory.")) queueRefresh();
   if (e.type.startsWith("device.")) devices.queue();
+  if (e.type.startsWith(("job.")) || e.type.startsWith("automation.") || e.type.startsWith("habit.") || e.type === "brief.ready" || e.type === "privacy.changed" || e.type === "mission.watchdog") proactive.queue();
   if (CODING_TYPES.some((t) => e.type.startsWith(t))) coding.onEvent(e);
   if (e.type.startsWith("home.") || e.type === "power.wake.sent") home.queue();
   if (e.type.startsWith("news.")) globeUI.queue();
@@ -222,6 +223,41 @@ $("countryCards").addEventListener("click", (e) => { const c = e.target.closest(
 $("globeTopic").addEventListener("change", (e) => { globeUI.topic = e.target.value; globeUI.refresh(); });
 $("newsRefreshBtn").addEventListener("click", async () => { $("globeInfo").textContent = "refreshing…"; try { const r = await api("/news/refresh", { method: "POST" }); $("globeInfo").textContent = `+${r.created} new · ${r.updated} updated`; } catch (err) { $("globeInfo").textContent = String(err.message || err).slice(0, 60); } });
 
+// -------- proactive (SPEC §14/§15) --------------------------------------------------------------------
+// Suggestions (habit detector), scheduled jobs, the latest brief and the privacy mode - all read
+// from the Core; accept/dismiss/run/delete are owner actions through the API.
+const proactive = {
+  timer: null,
+  queue() { if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.refresh(); }, 250); },
+  async refresh() {
+    const [sched, sugg, brief, priv] = await Promise.all([api("/schedule"), api("/suggestions"), api("/brief"), api("/privacy")]).catch(() => [null, null, null, null]);
+    if (!sched) return;
+    const pending = sugg.filter((s) => s.status === "pending");
+    const privacyChips = priv.modes.map((m) => `<span class="chip ${m === priv.mode ? "active" : ""}" data-privacy="${m}">${m}</span>`).join("");
+    const sug = pending.length ? pending.map((s) => `<div class="pro-row"><span class="when">${esc(s.at)}</span><span class="n">${esc(s.title)} <small class="muted">${s.evidence.days} days · ${Math.round(s.confidence * 100)}%</small></span>
+      <button class="primary" data-sacc="${s.suggestion_id}">accept</button><button data-sdis="${s.suggestion_id}">dismiss</button></div>`).join("") : `<div class="empty">No new routines detected. JARVIS proposes, you decide.</div>`;
+    const jobs = sched.jobs.length ? sched.jobs.map((j) => `<div class="pro-row ${j.enabled ? "" : "off"}"><span class="when">${j.next_run_at ? fmtTime(j.next_run_at) : "—"}</span><span class="n">${esc(j.name)} <small class="muted">${j.source} · ${j.runs} runs${j.last_status ? ` · ${esc(j.last_status)}` : ""}</small></span>
+      <button data-jrun="${j.job_id}">run</button><button data-jtoggle="${j.job_id}" data-to="${j.enabled ? "disable" : "enable"}">${j.enabled ? "pause" : "enable"}</button><button class="danger" data-jdel="${j.job_id}">delete</button></div>`).join("") : `<div class="empty">No scheduled jobs.</div>`;
+    $("proactive").innerHTML = `<div class="pro-head">PRIVACY <span class="muted">${priv.learning ? "learning" : "not learning"}${priv.satellites_paused ? " · satellites paused" : ""}</span><span class="chips">${privacyChips}</span></div>
+      <div class="pro-head">SUGGESTIONS <button data-scan="1">scan now</button></div>${sug}
+      <div class="pro-head">SCHEDULE <span class="muted">${sched.running ? "loop running" : "loop off"}</span></div>${jobs}
+      <div class="pro-head">BRIEF <button data-brief="1">generate</button></div><div class="brief-text">${brief.text ? esc(brief.text) : "No brief yet."}</div>`;
+  },
+};
+$("proactive").addEventListener("click", async (e) => {
+  const b = e.target.closest("button, [data-privacy]"); if (!b) return;
+  const post = (p, body) => api(p, { method: "POST", body: body ? JSON.stringify(body) : undefined }).catch((err) => alert(err.message || err));
+  if (b.dataset.sacc) await post(`/suggestions/${b.dataset.sacc}/accept`);
+  if (b.dataset.sdis) await post(`/suggestions/${b.dataset.sdis}/dismiss`);
+  if (b.dataset.scan) await post("/suggestions/scan");
+  if (b.dataset.jrun) await post(`/schedule/${b.dataset.jrun}/run`);
+  if (b.dataset.jtoggle) await post(`/schedule/${b.dataset.jtoggle}/${b.dataset.to}`);
+  if (b.dataset.jdel && confirm("Delete this job?")) await post(`/schedule/${b.dataset.jdel}/delete`);
+  if (b.dataset.brief) await post("/brief");
+  if (b.dataset.privacy) await post("/commands", { text: b.dataset.privacy === "normal" ? "privacy mode off" : b.dataset.privacy === "guest" ? "guest mode on" : "privacy mode on", device_id: "hud", device_trusted: $("trusted").checked });
+  proactive.refresh();
+});
+
 // -------- devices (SPEC §10 device mesh) ------------------------------------------------------------
 // Enrolled devices come from GET /devices; ENROLL mints a one-time code (shown once, never in an
 // event); REVOKE is final. Unsigned HUD calls count as the local owner only on loopback (ADR-0004).
@@ -267,6 +303,7 @@ $("missionTabs").addEventListener("click", (e) => {
   for (const x of $("missionTabs").children) x.classList.toggle("active", x === b);
   for (const el of document.querySelectorAll(".missions [data-tab]")) el.hidden = el.dataset.tab !== b.dataset.tab;
   if (b.dataset.tab === "devices") { $("thisDevice").hidden = false; devices.refresh(); } else $("thisDevice").hidden = true;
+  if (b.dataset.tab === "proactive") proactive.refresh();
 });
 
 // -------- home (SPEC §11) ---------------------------------------------------------------------------

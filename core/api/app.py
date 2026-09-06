@@ -12,7 +12,10 @@ Endpoints
     POST /kill, POST /resume {method, device_id, device_trusted}
     GET  /devices, POST /devices/enroll/start, POST /devices/enroll, POST /devices/{id}/revoke|trust
     POST /missions/{id}/handover {to_device_id}   move responsibility desktop <-> mobile
-    GET  /notifications                             push deliveries (notify.sent|failed)
+    GET  /notifications                             push deliveries (notify.sent|failed|suppressed)
+    GET/POST /schedule, POST /schedule/{id}/run|enable|disable|delete   background jobs
+    GET  /suggestions, POST /suggestions/scan, POST /suggestions/{id}/accept|dismiss
+    GET/POST /brief, GET /privacy                    daily brief, privacy mode
     GET  /news?country&topic&limit, /news/countries, /news/{id}, POST /news/refresh   globe data
     POST /telemetry {point, ms}                     HUD frame/input timings -> telemetry.latency
     Signed requests (X-Jarvis-Device/Timestamp/Nonce/Signature) bind device_trusted to the
@@ -164,6 +167,19 @@ class TelemetryIn(BaseModel):
     device_id: str | None = None
 
 
+class JobIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    kind: str = Field(default="command", pattern=r"^(command|capability)$")
+    text: str | None = Field(default=None, max_length=2000)
+    capability: str | None = None
+    args: dict[str, Any] = Field(default_factory=dict)
+    every_s: int | None = Field(default=None, ge=60)
+    at: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    weekdays: list[int] | None = None
+    max_runs: int | None = Field(default=None, ge=1)
+    budget_s: int = Field(default=900, ge=60, le=86_400)
+
+
 class HandoverIn(BaseModel):
     to_device_id: str = Field(min_length=1, max_length=120)
     note: str | None = Field(default=None, max_length=200)
@@ -202,8 +218,25 @@ async def resolve_caller(request: Request) -> Caller:
 CallerDep = Annotated[Caller, Depends(resolve_caller)]
 
 
-def create_app(runtime: CoreRuntime) -> FastAPI:
-    app = FastAPI(title="JARVIS Core", version=runtime.version, docs_url="/docs")
+def create_app(runtime: CoreRuntime, *, scheduler: bool | None = None) -> FastAPI:
+    import os
+    from contextlib import asynccontextmanager
+
+    run_scheduler = (
+        scheduler
+        if scheduler is not None
+        else (os.environ.get("JARVIS_SCHEDULER", "off").lower() in ("1", "on", "true"))
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if run_scheduler:
+            runtime.scheduler.start()
+        yield
+        if run_scheduler:
+            await runtime.scheduler.stop()
+
+    app = FastAPI(title="JARVIS Core", version=runtime.version, docs_url="/docs", lifespan=lifespan)
     app.state.runtime = runtime
 
     def proof_for(body: ProofIn, who: Caller) -> ApprovalProof:
@@ -306,6 +339,15 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         satisfy a P3+ approval, and it is untrusted unless the owner enrolled it."""
         dev = who.device_id(f"satellite:{body.satellite_id}")
         trusted = who.effective_trust(body.device_trusted)
+        if (
+            runtime.privacy.state.satellites_paused
+            and runtime.intents.route(body.text).kind != "stop"
+        ):
+            return {
+                "status": "paused",
+                "speech": f"Privacy mode is {runtime.privacy.mode}. Voice satellites are paused.",
+                "device_id": dev,
+            }
         ev = dict(correlation_id="voice", user_id=body.user_id, device_id=dev)
         await runtime.bus.publish(
             Event.new("voice.transcript", "satellite", {"text": body.text, "final": True}, **ev)
@@ -454,6 +496,165 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             )
         )
         return {"ok": True, "within_budget": body.ms <= budget}
+
+    # -- proactivity (SPEC §14/§15): schedule, suggestions, brief, privacy ----------------------
+
+    @app.get("/schedule")
+    def schedule_list() -> dict[str, Any]:
+        return runtime.scheduler.snapshot()
+
+    @app.post("/schedule")
+    async def schedule_add(body: JobIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        from core.scheduler import Job
+
+        try:
+            job = runtime.scheduler.add(
+                Job(
+                    name=body.name,
+                    kind=body.kind,
+                    text=body.text,
+                    capability=body.capability,
+                    args=body.args,
+                    every_s=body.every_s,
+                    at=body.at,
+                    weekdays=tuple(body.weekdays) if body.weekdays is not None else None,
+                    max_runs=body.max_runs,
+                    budget_s=body.budget_s,
+                    created_by=who.device_id("local") or "local",
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        await runtime.bus.publish(
+            Event.new(
+                "job.created",
+                "core-api",
+                {"job": job.to_dict()},
+                correlation_id=f"job:{job.job_id}",
+            )
+        )
+        return job.to_dict()
+
+    @app.post("/schedule/{job_id}/{action}")
+    async def schedule_action(job_id: str, action: str, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        job = runtime.scheduler.store.get(job_id)
+        if job is None:
+            raise HTTPException(404, "job not found")
+        if action == "run":
+            return await runtime.scheduler.run_job(job)
+        if action in ("enable", "disable"):
+            job.enabled = action == "enable"
+            if job.enabled and job.next_run_at is None:
+                job.next_run_at = job.compute_next(job.created_at)
+            runtime.scheduler.store.save(job)
+            return job.to_dict()
+        if action == "delete":
+            runtime.scheduler.store.delete(job_id)
+            await runtime.bus.publish(
+                Event.new(
+                    "job.deleted",
+                    "core-api",
+                    {"job": job.to_dict()},
+                    correlation_id=f"job:{job_id}",
+                )
+            )
+            return {"deleted": True}
+        raise HTTPException(400, "action must be run|enable|disable|delete")
+
+    @app.get("/suggestions")
+    def suggestions_list(status: str | None = None) -> list[dict[str, Any]]:
+        return [s.to_dict() for s in runtime.habits.store.list(status)]
+
+    @app.post("/suggestions/scan")
+    async def suggestions_scan(who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        created = await runtime.habits.scan()
+        return {"created": [s.to_dict() for s in created]}
+
+    @app.post("/suggestions/{suggestion_id}/{action}")
+    async def suggestions_action(suggestion_id: str, action: str, who: CallerDep) -> dict[str, Any]:
+        """Accept turns a suggestion into a job (plus a P0 preload job when one exists);
+        dismiss silences it. JARVIS never activates a routine on its own (SPEC §15)."""
+        owner_only(who)
+        from datetime import UTC, datetime
+
+        from core.scheduler import Job
+
+        s = runtime.habits.store.get(suggestion_id)
+        if s is None:
+            raise HTTPException(404, "suggestion not found")
+        if s.status != "pending":
+            raise HTTPException(409, f"suggestion is already {s.status}")
+        if action not in ("accept", "dismiss"):
+            raise HTTPException(400, "action must be accept|dismiss")
+        s.status = "accepted" if action == "accept" else "dismissed"
+        s.updated_at = datetime.now(UTC)
+        created_jobs = []
+        if action == "accept":
+            job = runtime.scheduler.add(
+                Job(
+                    name=f"routine: {s.command}",
+                    kind="command",
+                    text=s.command,
+                    at=s.at,
+                    weekdays=s.weekdays,
+                    source="suggestion",
+                    created_by=who.device_id("local") or "local",
+                )
+            )
+            s.job_id = job.job_id
+            created_jobs.append(job.to_dict())
+            pre = runtime.habits.preload_for(s)
+            if pre is not None and pre[0] in runtime.capabilities:
+                try:
+                    pj = runtime.scheduler.add(
+                        Job(
+                            name=f"preload: {pre[0]} before {s.at}",
+                            kind="capability",
+                            capability=pre[0],
+                            args=pre[1],
+                            at=pre[2],
+                            weekdays=s.weekdays,
+                            source="preload",
+                            created_by="system",
+                        )
+                    )
+                    created_jobs.append(pj.to_dict())
+                except ValueError:
+                    pass  # not P0 -> no automatic preparation
+        runtime.habits.store.save(s)
+        await runtime.bus.publish(
+            Event.new(
+                f"automation.{s.status}",
+                "core-api",
+                {**s.to_dict(), "jobs": created_jobs, "by": who.device_id("local")},
+                correlation_id="proactive",
+            )
+        )
+        return {"suggestion": s.to_dict(), "jobs": created_jobs}
+
+    @app.get("/brief")
+    def brief_latest() -> dict[str, Any]:
+        rows = runtime.bus.replay(type_prefix="brief.ready")
+        return rows[-1][1].payload if rows else {"text": None, "sections": []}
+
+    @app.post("/brief")
+    async def brief_generate(who: CallerDep) -> dict[str, Any]:
+        res = await runtime.executor.run(
+            "brief.generate",
+            {"reason": "requested"},
+            actor=f"owner:{who.device_id('api') or 'api'}",
+            correlation_id="brief",
+            device_id=who.device_id(None),
+            device_trusted=who.effective_trust(True),
+        )
+        return res.invocation.result or {}
+
+    @app.get("/privacy")
+    def privacy_get() -> dict[str, Any]:
+        return runtime.privacy.state.to_dict()
 
     @app.get("/notifications")
     def notifications(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:

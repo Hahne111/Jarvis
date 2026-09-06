@@ -45,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
 
     runtime = CoreRuntime.build()
     runtime.recover()
-    app = create_app(runtime)
+    app = create_app(
+        runtime, scheduler=os.environ.get("JARVIS_SCHEDULER", "on").lower() in ("1", "on", "true")
+    )
     host = os.environ.get("JARVIS_CORE_HOST", "127.0.0.1")
     if host not in LOOPBACK and runtime.devices.count() == 0:
         print(

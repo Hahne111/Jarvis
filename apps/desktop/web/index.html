@@ -68,10 +68,11 @@
   </section>
 
   <section class="panel missions">
-    <h2><nav class="tabs" id="missionTabs"><button data-tab="missions" class="active">MISSIONS</button><button data-tab="devices">DEVICES</button></nav>
+    <h2><nav class="tabs" id="missionTabs"><button data-tab="missions" class="active">MISSIONS</button><button data-tab="devices">DEVICES</button><button data-tab="proactive">PROACTIVE</button></nav>
       <button id="enrollBtn" class="primary" hidden title="Mint a one-time enrollment code for a new device">ENROLL</button></h2>
     <div id="missions" class="list" data-tab="missions"></div>
     <div id="devices" class="list" data-tab="devices" hidden></div>
+    <div id="proactive" class="list" data-tab="proactive" hidden></div>
     <form id="thisDevice" class="this-device" data-tab="devices" hidden autocomplete="off">
       <span id="thisDeviceInfo" class="muted">this device is not enrolled</span>
       <input id="enrollCode" placeholder="code" maxlength="8" aria-label="Enrollment code">

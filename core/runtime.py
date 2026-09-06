@@ -54,6 +54,17 @@ from core.news import FakeNewsSource, NewsPipeline, NewsStore, register_news, so
 from core.notify import PushService, PushTransport, push_transport_from_env
 from core.permissions import PermissionEngine, Policy
 from core.presence import PresenceService
+from core.proactive import (
+    BriefBuilder,
+    Context,
+    HabitDetector,
+    PrivacyService,
+    RelevanceEngine,
+    SuggestionStore,
+    register_brief,
+    register_privacy,
+)
+from core.scheduler import JobStore, Scheduler
 from core.verifier import (
     VerificationService,
     VerifiedExecutor,
@@ -90,6 +101,11 @@ class CoreRuntime:
     auth: DeviceAuthenticator
     notify: PushService | None
     news: NewsPipeline | None
+    scheduler: Scheduler
+    relevance: RelevanceEngine
+    habits: HabitDetector
+    privacy: PrivacyService
+    brief: BriefBuilder
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -144,6 +160,8 @@ class CoreRuntime:
         news_pipeline = news if isinstance(news, NewsPipeline) else _news_pipeline(news, bus, store)
         if news_pipeline is not None:
             register_news(capabilities, news_pipeline)
+        privacy = PrivacyService(bus, memory_writer)
+        register_privacy(capabilities, verifiers, privacy)
         verification = VerificationService(verifiers, capabilities, bus)
         executor = VerifiedExecutor(gateway, verification, capabilities)
         router = router if router is not None else ModelRouter()
@@ -160,6 +178,7 @@ class CoreRuntime:
             else push_transport_from_env(push)
         )
         notify = PushService(bus, transport) if transport is not None else None
+        habits = HabitDetector(bus, SuggestionStore(store.engine))
         coordinator = AgentCoordinator(
             bus=bus,
             executor=executor,
@@ -170,7 +189,7 @@ class CoreRuntime:
             memory=memory,
             workspaces=workspaces,
         )
-        return cls(
+        runtime = cls(
             store=store,
             bus=bus,
             missions=missions,
@@ -194,8 +213,52 @@ class CoreRuntime:
             auth=auth,
             notify=notify,
             news=news_pipeline,
+            scheduler=None,  # type: ignore[arg-type]
+            relevance=None,  # type: ignore[arg-type]
+            habits=habits,
+            privacy=privacy,
+            brief=None,  # type: ignore[arg-type]
             db_url=url,
         )
+        runtime._wire_proactive()
+        return runtime
+
+    def _wire_proactive(self) -> None:
+        """Pieces that need the whole runtime: brief, relevance context, scheduler."""
+        from core.api.commands import run_text_command
+
+        self.brief = BriefBuilder(self)
+        register_brief(self.capabilities, self.brief, self.bus)
+
+        def context() -> Context:
+            from datetime import datetime
+
+            return Context(
+                home_state=self.home.states.current.value if self.home else "home",
+                privacy_mode=self.privacy.mode,
+                hour=datetime.now().hour,
+                home_country=os.environ.get("JARVIS_HOME_COUNTRY") or None,
+            )
+
+        self.relevance = RelevanceEngine(context)
+        if self.notify is not None:
+            self.notify.gate = self._push_gate
+        self.scheduler = Scheduler(
+            self.bus,
+            JobStore(self.store.engine),
+            self.missions,
+            self.capabilities,
+            run_command=lambda text, **kw: run_text_command(self, text, **kw),
+            run_capability=self.executor.run,
+        )
+        self.scheduler.ensure_system_jobs()
+
+    def _push_gate(self, ev: Any) -> bool:
+        """Relevance Engine decides what may reach the phone; privacy narrows it further."""
+        a = self.relevance.assess(ev)
+        if self.privacy.state.only_critical_push:
+            return a.channel == "now" and a.urgency >= 0.9
+        return self.relevance.pushable(a)
 
     def recover(self) -> dict[str, int]:
         """After a restart: rebuild permission state from the log; missions load from snapshots."""
@@ -206,6 +269,7 @@ class CoreRuntime:
             "session_memory_dropped": self._drop_session_memory(),
             "presence_devices": len(self.presence.rebuild()["devices"]),
             "home_state": self._rebuild_home(),
+            "privacy": self.privacy.rebuild(),
         }
 
     def _rebuild_home(self) -> str | None:
@@ -236,6 +300,11 @@ class CoreRuntime:
             "devices": self.devices.count(),
             "push": self.notify.transport.name if self.notify else None,
             "news": self.news.store.count() if self.news else None,
+            "privacy": self.privacy.mode,
+            "scheduler": {
+                "running": self.scheduler.snapshot()["running"],
+                "jobs": len(self.scheduler.store.list()),
+            },
             "capabilities": self.capabilities.health(),
         }
 

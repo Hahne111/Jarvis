@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -101,6 +102,7 @@ class PushService:
         self._bus = bus
         self.transport = transport
         self._sub = bus.subscribe("*", self._on_event)
+        self.gate: Callable[[Event], bool] | None = None  # Relevance Engine hook (Phase 11)
         self._tasks: set[asyncio.Task[None]] = set()
 
     def close(self) -> None:
@@ -159,6 +161,16 @@ class PushService:
             return
         msg = self.message_for(ev)
         if msg is None:
+            return
+        if self.gate is not None and not self.gate(ev):
+            await self._bus.publish(
+                Event.new(
+                    "notify.suppressed",
+                    SOURCE,
+                    {**msg.to_dict(), "channel": self.transport.name},
+                    correlation_id=msg.correlation_id,
+                )
+            )
             return
         await self.deliver(msg)
 

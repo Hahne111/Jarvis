@@ -97,3 +97,7 @@ body[data-mode=mission] .panel.coding{display:none} body[data-mode=mission] .pan
 .badge{border:1px solid var(--amber-dim);color:var(--amber);border-radius:3px;padding:0 5px;font-size:10px;margin-left:6px} .badge.forecast{border-color:#3a4a5a;color:var(--muted)} .badge.breaking{border-color:var(--red);color:var(--red)}
 .evidence .src{display:flex;gap:8px;padding:2px 0;border-bottom:1px dotted #142230;font-size:11px} .evidence .src .q{color:var(--green);min-width:38px} .evidence .src a{color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:760px){.modes{margin-left:auto} .globe-body{grid-template-columns:1fr;grid-template-rows:260px 1fr} body[data-mode=globe] .panel.globe{order:1}}
+/* proactive (SPEC §14/§15): suggestions are proposed, never activated; jobs and the brief come from persisted state */
+.pro-head{display:flex;gap:8px;align-items:center;margin:6px 0 2px;font:700 11px var(--sans);letter-spacing:.16em;color:var(--muted)} .pro-head .chip{margin-left:auto}
+.pro-row{display:flex;gap:8px;align-items:center;padding:3px 0;border-bottom:1px dotted #142230} .pro-row .n{flex:1} .pro-row .when{color:var(--amber);min-width:52px} .pro-row button{padding:1px 6px;font-size:10px}
+.pro-row.off .n{color:var(--muted);text-decoration:line-through} .brief-text{white-space:pre-wrap;color:var(--text);font:12px/1.5 var(--sans);padding:4px 0}
