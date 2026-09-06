@@ -10,6 +10,7 @@ pillow>=10.0.0
 ddgs>=9.0.0
 pyyaml>=6.0.2
 sqlalchemy>=2.0.0
+cryptography>=42.0.0  # Ed25519 device keys / signed requests (Phase 9), backup encryption
 numpy>=1.26.0
 sounddevice>=0.5.0
 fastapi>=0.115.0

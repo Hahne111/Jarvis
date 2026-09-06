@@ -4,4 +4,5 @@ sqlalchemy>=2.0.0
 fastapi>=0.115.0
 uvicorn>=0.34.0
 httpx>=0.27.0        # fastapi.testclient
+cryptography>=42.0.0  # Ed25519 device keys / signed requests (Phase 9), backup encryption
 pytest>=8.0.0

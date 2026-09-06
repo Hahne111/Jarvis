@@ -66,3 +66,9 @@ body[data-state=halted] .ring{animation-play-state:paused;border-color:#5a2a2a}
 .rooms .room{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:2px 0;border-bottom:1px dotted #142230} .rooms .room b{color:var(--cyan);font-weight:600;min-width:90px}
 .rooms .dev{border:1px solid #27394a;border-radius:3px;padding:0 6px;font-size:11px;color:var(--text);cursor:pointer} .rooms .dev.on{border-color:var(--green);color:var(--green)}
 .rooms .dev.p4{cursor:default;color:var(--amber);border-color:var(--amber-dim)} .rooms .dev.p4::after{content:" P4";color:var(--muted)}
+/* devices (SPEC §10): enrolled devices, trust and revocation; the enrollment code is shown once */
+.missions h2 .tabs{margin-left:0} .missions h2 #enrollBtn{margin-left:auto;padding:3px 8px;font-size:11px}
+.dev-row{display:flex;gap:8px;align-items:center;padding:3px 0;border-bottom:1px dotted #142230} .dev-row .t{color:var(--muted);min-width:60px} .dev-row .n{flex:1}
+.dev-row .trusted{color:var(--green)} .dev-row .untrusted{color:var(--amber)} .dev-row .revoked{color:var(--red);text-decoration:line-through} .dev-row button{padding:1px 6px;font-size:10px}
+.enroll-code{border:1px solid var(--amber-dim);border-radius:4px;padding:8px;margin:6px 0;background:#0a1016;color:var(--amber);font:16px var(--mono);letter-spacing:.2em}
+.enroll-code small{display:block;color:var(--muted);letter-spacing:0;font:11px var(--mono);margin-top:4px}

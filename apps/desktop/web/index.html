@@ -59,8 +59,10 @@
   </section>
 
   <section class="panel missions">
-    <h2>MISSIONS</h2>
-    <div id="missions" class="list"></div>
+    <h2><nav class="tabs" id="missionTabs"><button data-tab="missions" class="active">MISSIONS</button><button data-tab="devices">DEVICES</button></nav>
+      <button id="enrollBtn" class="primary" hidden title="Mint a one-time enrollment code for a new device">ENROLL</button></h2>
+    <div id="missions" class="list" data-tab="missions"></div>
+    <div id="devices" class="list" data-tab="devices" hidden></div>
   </section>
 
   <section class="panel memory">

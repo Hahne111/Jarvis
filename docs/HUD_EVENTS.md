@@ -34,6 +34,7 @@ Das HUD (Tauri/React, später Mobile) rendert **ausschließlich persistierte Eve
 | Coding: Preview | `GET /workspace/{mission}/preview/<path>` im `<iframe sandbox="allow-scripts">` | nur Dateien des Missions-Workspaces, CSP-Sandbox, kein Cache |
 | Power / WOL | `power.wake.sent` (`name`, `host`, `port`, `actor`; nie die MAC), Erreichbarkeit via Capability `power.status` | `power.wake` ist P3 ⇒ erscheint als `permission.ask` |
 | Voice-Satelliten | `voice.transcript|thinking|speaking|idle` mit `device_id=satellite:<id>` (Quelle `satellite`, `POST /satellite/command`) | Presence pro Satellit; Antworttext im `voice.speaking`-Payload |
+| Devices (Phase 9, ADR-0004) | `device.enrollment.started|failed`, `device.enrolled`, `device.trust.changed`, `device.revoked`, `device.auth.failed`; Daten via `GET /devices` (Fingerprint, Trust, last_seen – nie der Key) | Enrollment-Code kommt nur aus der Antwort von `POST /devices/enroll/start`, nie aus einem Event |
 | Home (Phase 8) | `home.device.changed` (`entity_id`, `from`, `to`, `domain`, `service`, `actor`), `home.state.changed` (`from`, `to`, `policy`), Daten via `GET /home` (Räume, Geräte, State, `online`) | Aktionen nur über `/commands` bzw. Capabilities `home.*`; Lock/Alarm/Garage erscheinen als `permission.ask` mit `required_strength=3` |
 
 ## Presence-Zustände (`presence.changed`)

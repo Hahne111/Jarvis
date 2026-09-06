@@ -36,6 +36,7 @@ from adapters.workspace import WorkspaceManager, register_workspace
 from core import __version__
 from core.agents import AgentCoordinator
 from core.capabilities import CapabilityRegistry, ExecutionGateway, register_mocks
+from core.devices import DeviceAuthenticator, DeviceRegistry
 from core.events import EventBus, SQLEventStore
 from core.intents.router import IntentRouter
 from core.memory import HashingEmbedder, MemoryStore, MemoryWriter
@@ -83,6 +84,8 @@ class CoreRuntime:
     workspaces: WorkspaceManager
     home: HomeService | None
     wol: WolService | None
+    devices: DeviceRegistry
+    auth: DeviceAuthenticator
     db_url: str
     version: str = __version__
     # decision_id -> pending command (mission + call) waiting for approval
@@ -140,6 +143,8 @@ class CoreRuntime:
                 provider or os.environ.get("JARVIS_PROVIDER"), router
             )
         presence = PresenceService(bus)
+        devices = DeviceRegistry(store.engine)
+        auth = DeviceAuthenticator(devices)
         coordinator = AgentCoordinator(
             bus=bus,
             executor=executor,
@@ -170,6 +175,8 @@ class CoreRuntime:
             workspaces=workspaces,
             home=home_service,
             wol=wol_service,
+            devices=devices,
+            auth=auth,
             db_url=url,
         )
 
@@ -209,6 +216,7 @@ class CoreRuntime:
             "memory_items": self.memory.count(),
             "presence": self.presence.snapshot(),
             "home": self.home.states.current.value if self.home else None,
+            "devices": self.devices.count(),
             "capabilities": self.capabilities.health(),
         }
 

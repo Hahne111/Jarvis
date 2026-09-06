@@ -10,6 +10,9 @@ Endpoints
     POST /approvals/{decision_id}/approve {method, device_id, device_trusted, reference?}
     POST /approvals/{decision_id}/deny {reason?}
     POST /kill, POST /resume {method, device_id, device_trusted}
+    GET  /devices, POST /devices/enroll/start, POST /devices/enroll, POST /devices/{id}/revoke|trust
+    Signed requests (X-Jarvis-Device/Timestamp/Nonce/Signature) bind device_trusted to the
+    registry; unsigned callers are trusted only from loopback (core/devices/auth.py, ADR-0004)
     GET  /presence                     derived presence per device (docs/HUD_EVENTS.md)
     GET  /debug                        minimal debug dashboard (static HTML)
     GET  /hud/                         web-first HUD shell (apps/desktop/web, ADR-0003)
@@ -27,11 +30,11 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from adapters.home import HomeUnavailable
 from adapters.workspace import WorkspaceError
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -44,6 +47,7 @@ from core.api.commands import (
     spoken_summary,
 )
 from core.capabilities import InvocationStatus
+from core.devices import AuthError, Caller, DeviceType, EnrollmentError, valid_public_key
 from core.events.envelope import Event
 from core.memory import MemoryPolicyError, MemoryType
 from core.missions import MissionNotFound, MissionStatus
@@ -127,6 +131,26 @@ class SatelliteIn(BaseModel):
     device_trusted: bool = False  # strict default; the owner enrolls satellites explicitly
 
 
+class EnrollStartIn(BaseModel):
+    name_hint: str = Field(default="", max_length=120)
+    type: DeviceType = DeviceType.MOBILE
+    trusted: bool = True
+
+
+class EnrollIn(BaseModel):
+    code: str = Field(min_length=4, max_length=32)
+    name: str = Field(min_length=1, max_length=120)
+    public_key: str = Field(min_length=40, max_length=64)
+
+
+class RevokeIn(BaseModel):
+    reason: str | None = None
+
+
+class TrustIn(BaseModel):
+    trusted: bool
+
+
 class WorkspaceWriteIn(BaseModel):
     path: str = Field(min_length=1, max_length=512)
     content: str = Field(max_length=2_000_000)
@@ -135,9 +159,60 @@ class WorkspaceWriteIn(BaseModel):
     user_id: str = "local-owner"
 
 
+async def resolve_caller(request: Request) -> Caller:
+    """Who is calling: a signed device (the registry decides trust) or the loopback owner."""
+    runtime: CoreRuntime = request.app.state.runtime
+    body = await request.body()
+    host = request.client.host if request.client else None
+    try:
+        return runtime.auth.resolve(
+            dict(request.headers), request.method, request.url.path, body, host
+        )
+    except AuthError as exc:
+        await runtime.bus.publish(
+            Event.new(
+                "device.auth.failed",
+                "core-api",
+                {"device_id": exc.device_id, "reason": exc.reason, "path": request.url.path},
+                correlation_id="devices",
+                device_id=exc.device_id,
+            )
+        )
+        raise HTTPException(401, f"device authentication failed: {exc.reason}") from None
+
+
+CallerDep = Annotated[Caller, Depends(resolve_caller)]
+
+
 def create_app(runtime: CoreRuntime) -> FastAPI:
     app = FastAPI(title="JARVIS Core", version=runtime.version, docs_url="/docs")
     app.state.runtime = runtime
+
+    def proof_for(body: ProofIn, who: Caller) -> ApprovalProof:
+        """Bind the proof to what the Core can verify about the caller (SECURITY.md §2 rule 1)."""
+        strong = body.method in (
+            ProofMethod.PASSKEY,
+            ProofMethod.BIOMETRIC,
+            ProofMethod.HARDWARE_KEY,
+        )
+        if strong and not who.may_prove_strongly:
+            raise HTTPException(
+                403, "a strong proof needs a signed, trusted device or the local owner"
+            )
+        if body.method is ProofMethod.UI_CONFIRM and not (who.local or who.trusted):
+            raise HTTPException(403, "ui_confirm needs an unlocked trusted device")
+        proof = body.to_proof()
+        return ApprovalProof(
+            method=proof.method,
+            subject=proof.subject,
+            device_id=who.device_id(proof.device_id),
+            device_trusted=who.effective_trust(proof.device_trusted),
+            reference=proof.reference,
+        )
+
+    def owner_only(who: Caller) -> None:
+        if not (who.local or (who.signed and who.trusted)):
+            raise HTTPException(403, "only the local owner or a trusted device may do this")
 
     # -- health / events -----------------------------------------------------------------------
 
@@ -196,22 +271,23 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
     # -- commands ------------------------------------------------------------------------------
 
     @app.post("/commands")
-    async def commands(body: CommandIn) -> dict[str, Any]:
+    async def commands(body: CommandIn, who: CallerDep) -> dict[str, Any]:
         return await run_text_command(
             runtime,
             body.text,
             user_id=body.user_id,
-            device_id=body.device_id,
-            device_trusted=body.device_trusted,
+            device_id=who.device_id(body.device_id),
+            device_trusted=who.effective_trust(body.device_trusted),
             source="core-api",
         )
 
     @app.post("/satellite/command")
-    async def satellite_command(body: SatelliteIn) -> dict[str, Any]:
+    async def satellite_command(body: SatelliteIn, who: CallerDep) -> dict[str, Any]:
         """Voice satellite (e.g. Home Assistant Assist 'Hey Jarvis'): final transcript in,
         short spoken answer out. The satellite is a device like any other: voice can never
         satisfy a P3+ approval, and it is untrusted unless the owner enrolled it."""
-        dev = f"satellite:{body.satellite_id}"
+        dev = who.device_id(f"satellite:{body.satellite_id}")
+        trusted = who.effective_trust(body.device_trusted)
         ev = dict(correlation_id="voice", user_id=body.user_id, device_id=dev)
         await runtime.bus.publish(
             Event.new("voice.transcript", "satellite", {"text": body.text, "final": True}, **ev)
@@ -222,7 +298,7 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
             body.text,
             user_id=body.user_id,
             device_id=dev,
-            device_trusted=body.device_trusted,
+            device_trusted=trusted,
             source="satellite",
         )
         speech = spoken_summary(result)
@@ -250,9 +326,9 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return [d.to_dict() for d in runtime.permissions.pending()]
 
     @app.post("/approvals/{decision_id}/approve")
-    async def approve(decision_id: str, body: ProofIn) -> dict[str, Any]:
+    async def approve(decision_id: str, body: ProofIn, who: CallerDep) -> dict[str, Any]:
         try:
-            decision = await runtime.permissions.approve(decision_id, body.to_proof())
+            decision = await runtime.permissions.approve(decision_id, proof_for(body, who))
         except ApprovalError as exc:
             raise HTTPException(409, str(exc)) from None
         pending = runtime.pending_commands.pop(decision_id, None)
@@ -271,7 +347,8 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return {"decision": decision.to_dict(), "resumed": False}
 
     @app.post("/approvals/{decision_id}/deny")
-    async def deny(decision_id: str, body: DenyIn) -> dict[str, Any]:
+    async def deny(decision_id: str, body: DenyIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)  # deny is final for the mission: not for anonymous remote callers
         try:
             decision = await runtime.permissions.deny(decision_id, body.reason)
         except ApprovalError as exc:
@@ -289,12 +366,85 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return {"halted": True}
 
     @app.post("/resume")
-    async def resume(body: ProofIn) -> dict[str, Any]:
+    async def resume(body: ProofIn, who: CallerDep) -> dict[str, Any]:
         try:
-            await runtime.gateway.resume(body.to_proof())
+            await runtime.gateway.resume(proof_for(body, who))
         except (ApprovalError, PolicyViolation) as exc:
             raise HTTPException(403, str(exc)) from None
         return {"halted": False}
+
+    # -- devices: enrollment, trust, revocation (Phase 9, SPEC §10) ---------------------------
+
+    async def _device_event(event_type: str, payload: dict[str, Any], device_id: str) -> None:
+        await runtime.bus.publish(
+            Event.new(
+                event_type, "core-api", payload, correlation_id="devices", device_id=device_id
+            )
+        )
+
+    @app.get("/devices")
+    def devices_list(who: CallerDep) -> dict[str, Any]:
+        return {
+            "caller": who.to_dict(),
+            "devices": [d.to_dict() for d in runtime.devices.list()],
+            "pending_enrollments": [
+                e.to_dict(with_code=False) for e in runtime.devices.pending_enrollments()
+            ],
+        }
+
+    @app.post("/devices/enroll/start")
+    async def devices_enroll_start(body: EnrollStartIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        e = runtime.devices.start_enrollment(
+            name_hint=body.name_hint,
+            type=body.type,
+            trusted=body.trusted,
+            created_by=who.device_id("local") or "local",
+        )
+        await _device_event(
+            "device.enrollment.started", e.to_dict(with_code=False), e.enrollment_id
+        )
+        return e.to_dict(with_code=True)  # the code is shown once, here, never in an event
+
+    @app.post("/devices/enroll")
+    async def devices_enroll(body: EnrollIn) -> dict[str, Any]:
+        if not valid_public_key(body.public_key):
+            raise HTTPException(400, "public_key must be a base64 raw Ed25519 public key")
+        try:
+            device = runtime.devices.complete_enrollment(
+                body.code, name=body.name, public_key=body.public_key
+            )
+        except EnrollmentError as exc:
+            await _device_event("device.enrollment.failed", {"reason": str(exc)}, "unknown")
+            raise HTTPException(403, str(exc)) from None
+        await _device_event("device.enrolled", device.to_dict(), device.device_id)
+        return device.to_dict()
+
+    @app.post("/devices/{device_id}/revoke")
+    async def devices_revoke(device_id: str, body: RevokeIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        try:
+            device = runtime.devices.revoke(device_id, body.reason)
+        except KeyError:
+            raise HTTPException(404, "device not found") from None
+        await _device_event(
+            "device.revoked", {**device.to_dict(), "by": who.device_id("local")}, device_id
+        )
+        return device.to_dict()
+
+    @app.post("/devices/{device_id}/trust")
+    async def devices_trust(device_id: str, body: TrustIn, who: CallerDep) -> dict[str, Any]:
+        owner_only(who)
+        current = runtime.devices.get(device_id)
+        if current is None:
+            raise HTTPException(404, "device not found")
+        if current.revoked:
+            raise HTTPException(409, "a revoked device cannot be trusted again; enroll anew")
+        device = runtime.devices.set_trusted(device_id, body.trusted)
+        await _device_event(
+            "device.trust.changed", {**device.to_dict(), "by": who.device_id("local")}, device_id
+        )
+        return device.to_dict()
 
     # -- memory: "What JARVIS Knows" (SPEC §8.4) -----------------------------------------------
 
@@ -406,7 +556,9 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         return {"path": path, "content": content}
 
     @app.put("/workspace/{mission_id}/file")
-    async def workspace_write(mission_id: str, body: WorkspaceWriteIn) -> dict[str, Any]:
+    async def workspace_write(
+        mission_id: str, body: WorkspaceWriteIn, who: CallerDep
+    ) -> dict[str, Any]:
         """Editor save: goes through the gate like any other write (P2, verified, evented)."""
         try:
             runtime.missions.get(mission_id)
@@ -415,11 +567,11 @@ def create_app(runtime: CoreRuntime) -> FastAPI:
         res = await runtime.executor.run(
             "workspace.write",
             {"path": body.path, "content": body.content},
-            actor=f"owner:{body.device_id or 'api'}",
+            actor=f"owner:{who.device_id(body.device_id) or 'api'}",
             correlation_id=mission_id,
             user_id=body.user_id,
-            device_id=body.device_id,
-            device_trusted=body.device_trusted,
+            device_id=who.device_id(body.device_id),
+            device_trusted=who.effective_trust(body.device_trusted),
         )
         inv, ver = res.invocation, res.verification
         payload = {"path": body.path, "invocation": inv.to_dict(), "verification": ver.to_dict()}

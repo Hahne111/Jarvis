@@ -84,10 +84,47 @@ function ingest(e) {
     dirty.latency = true;
   }
   if (e.type.startsWith("mission.") || e.type.startsWith("permission.") || e.type.startsWith("memory.")) queueRefresh();
+  if (e.type.startsWith("device.")) devices.queue();
   if (CODING_TYPES.some((t) => e.type.startsWith(t))) coding.onEvent(e);
   if (e.type.startsWith("home.") || e.type === "power.wake.sent") home.queue();
   scheduleRender();
 }
+
+// -------- devices (SPEC §10 device mesh) ------------------------------------------------------------
+// Enrolled devices come from GET /devices; ENROLL mints a one-time code (shown once, never in an
+// event); REVOKE is final. Unsigned HUD calls count as the local owner only on loopback (ADR-0004).
+const devices = {
+  timer: null, code: null,
+  queue() { if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.refresh(); }, 200); },
+  async refresh() {
+    const d = await api("/devices").catch(() => null);
+    if (!d) { $("devices").innerHTML = `<div class="empty">Devices unavailable.</div>`; return; }
+    $("enrollBtn").hidden = !(d.caller.local || d.caller.trusted);
+    const rows = d.devices.map((x) => `<div class="dev-row"><span class="t">${esc(x.type)}</span><span class="n">${esc(x.name)} <small class="muted">${x.fingerprint}</small></span>
+      <span class="${x.revoked_at ? "revoked" : x.trusted ? "trusted" : "untrusted"}">${x.revoked_at ? "revoked" : x.trusted ? "trusted" : "untrusted"}</span>
+      ${x.revoked_at ? "" : `<button data-trust="${x.device_id}" data-to="${!x.trusted}">${x.trusted ? "untrust" : "trust"}</button><button class="danger" data-revoke="${x.device_id}">revoke</button>`}</div>`);
+    const pending = d.pending_enrollments.map((e) => `<div class="dev-row muted"><span class="t">pending</span><span class="n">${esc(e.name_hint || e.type)} · until ${fmtTime(e.expires_at)}</span></div>`);
+    const code = this.code ? `<div class="enroll-code">${this.code.code}<small>enrollment code · valid until ${fmtTime(this.code.expires_at)} · enter it on the new device (POST /devices/enroll)</small></div>` : "";
+    $("devices").innerHTML = code + (rows.length || pending.length ? rows.join("") + pending.join("") : `<div class="empty">No devices enrolled. This HUD is the local owner.</div>`);
+  },
+};
+$("enrollBtn").addEventListener("click", async () => {
+  const name_hint = prompt("Name of the new device (e.g. phone):", "phone"); if (name_hint === null) return;
+  devices.code = await api("/devices/enroll/start", { method: "POST", body: JSON.stringify({ name_hint, type: "mobile", trusted: true }) }).catch((e) => { alert(e); return null; });
+  devices.refresh();
+});
+$("devices").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.revoke && confirm("Revoke this device? It can never be trusted again.")) await api(`/devices/${b.dataset.revoke}/revoke`, { method: "POST", body: JSON.stringify({ reason: "hud" }) }).catch(alert);
+  if (b.dataset.trust) await api(`/devices/${b.dataset.trust}/trust`, { method: "POST", body: JSON.stringify({ trusted: b.dataset.to === "true" }) }).catch(alert);
+  devices.refresh();
+});
+$("missionTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  for (const x of $("missionTabs").children) x.classList.toggle("active", x === b);
+  for (const el of document.querySelectorAll(".missions [data-tab]")) el.hidden = el.dataset.tab !== b.dataset.tab;
+  if (b.dataset.tab === "devices") devices.refresh();
+});
 
 // -------- home (SPEC §11) ---------------------------------------------------------------------------
 // Rooms, devices and the home state come from GET /home (refreshed on home.* events). Every click
